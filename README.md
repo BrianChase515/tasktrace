@@ -304,3 +304,9 @@ pytest
 ```
 
 MIT licensed.
+
+## Support
+
+TaskTrace is free. If it saves you time, you can buy me food and a beer:
+
+[![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?business=R3PWW7XAVVP2Y&no_recurring=0&item_name=Help+me+buy+food+and+beer.&currency_code=USD)
