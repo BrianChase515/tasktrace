@@ -1,6 +1,6 @@
 {
  "schema": "tasktrace/0.1",
- "generator": "tasktrace 0.6.1",
+ "generator": "tasktrace 0.6.2",
  "task": {
   "name": "q3-report",
   "goal": "Create the quarterly forecast report in Acme Portal",

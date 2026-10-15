@@ -234,6 +234,25 @@ def test_a_form_repeated_across_steps_is_written_once():
     assert steps[2]["container_context"]["interactive_siblings"][0]["title"] == "Submit"
 
 
+def test_a_wobbly_click_on_a_button_is_not_a_drag(tmp_path):
+    btn = {"role": "AXButton", "title": "Continue to next step"}
+    events = [{"t": 0, "type": "mouse_down", "button": "left", "x": 900, "y": 600, "clicks": 1,
+               "ctx": {"app": CHROME, "window": WIN, "element": btn}},
+              {"t": 90, "type": "mouse_up", "button": "left", "x": 909, "y": 607}]  # hand slipped 11px
+    assert _run(tmp_path, events)["steps"][0]["action"] == "click"
+
+    far = list(events)
+    far[1] = {**far[1], "x": 1200, "y": 820}  # a real drag is still a drag
+    assert _run(tmp_path, [dict(e) for e in far])["steps"][0]["action"] == "drag"
+
+
+def test_progress_that_only_appeared_reads_as_a_value_not_a_jump(tmp_path):
+    events = _click(0, 900, 600, {"role": "AXButton", "title": "Continue to next step"})
+    events.append({"t": 400, "type": "ui", "change": "progress", "to": "50 percent"})
+    line = _run(tmp_path, events)["outline"][0]
+    assert "progress now 50 percent" in line and "?" not in line
+
+
 def test_cli_guidance_flag_and_schema(tmp_path):
     jsonschema = pytest.importorskip("jsonschema")
     events = _click(0, 640, 420, {"role": "AXButton", "title": "Easy Apply", "frame": [604, 418, 120, 32]},

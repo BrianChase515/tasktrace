@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.2
+
+Polish from the second LinkedIn recording:
+
+- A click that slips a few pixels on a button is recorded as a click, not a drag. A plan saying
+  "drag the Continue button" is one an agent will faithfully try to obey.
+- Page changes are checked five times a second rather than two and a half, so a checkbox that
+  flips just before your next click lands on the step that caused it.
+- Progress that only appeared (rather than visibly moved) reads as "progress now 75 percent"
+  instead of "? -> 75 percent", and the same value is not announced twice.
+
 ## 0.6.1
 
 Fixes from the first real recording (LinkedIn Easy Apply, 45 steps):

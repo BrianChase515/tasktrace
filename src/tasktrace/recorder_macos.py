@@ -114,7 +114,7 @@ LIST_SCAN = 200  # children of a list to scan for the row that was clicked
 # seconds after each input, the focused window's contents are sampled and diffed instead.
 UI_NODES, UI_DEPTH = 400, 12
 UI_WATCH_S = 3.5
-UI_POLL_EVERY = 2  # every other poll tick, so ~0.4 s
+UI_POLL_EVERY = 1  # every poll tick (~0.2 s): slower than this and a change lands on the next step
 
 MOUSE_DOWN = {Quartz.kCGEventLeftMouseDown: "left", Quartz.kCGEventRightMouseDown: "right",
               Quartz.kCGEventOtherMouseDown: "other"}
@@ -484,6 +484,7 @@ class Recorder:
         self._ui_key: tuple | None = None
         self._ui_tick = 0
         self._ui_watch_until = 0.0
+        self._ui_last_progress: str | None = None
         self._ui_root = None  # the container last clicked in, set by the worker thread
         self._ui_root_gen = 0
         self._ui_prev_gen = -1
@@ -805,12 +806,21 @@ class Recorder:
                 return
             state = axcontext.ui_state(node, max_nodes=UI_NODES)
             key = (pid, window_key)
-            if key == self._ui_key:  # a different window is a fresh baseline, not a page change
+            if key != self._ui_key:
+                self._ui_last_progress = None  # a different window is a fresh baseline
+            else:
                 for ch in axcontext.diff_ui_state(self._ui_prev, state):
                     # Toggles and progress are matched by label, so they survive a change of
                     # what we're watching. Dialogs are matched by presence, so they don't.
                     if ch["change"].startswith("dialog_") and gen != self._ui_prev_gen:
                         continue
+                    if ch["change"] == "progress":
+                        # Switching panels can make progress look like it appeared rather than
+                        # moved. Remember the last value so it reads as a step, not a surprise.
+                        if ch["to"] == self._ui_last_progress:
+                            continue
+                        ch["from"] = ch.get("from") or self._ui_last_progress
+                        self._ui_last_progress = ch["to"]
                     self.emit({"type": "ui", **ch})
             self._ui_key, self._ui_prev, self._ui_prev_gen = key, state, gen
         except Exception as exc:

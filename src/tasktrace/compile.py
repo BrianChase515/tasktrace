@@ -18,6 +18,10 @@ TYPING_GAP_MS = 5000  # pause that splits one typing run into two
 SCROLL_MERGE_MS = 1500
 DOUBLE_CLICK_MS = 600
 DRAG_PX = 6
+CLICK_SLOP_PX = 20  # movement this small on a control is a wobbly click, not a drag
+CLICKY_ROLES = {"AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton",
+                "AXMenuItem", "AXMenuBarItem", "AXTab", "AXCell", "AXRow", "AXDockItem", "AXSwitch",
+                "AXToggle", "AXDisclosureTriangle"}
 
 SPECIAL_KEYS = {
     36: "return", 76: "enter", 48: "tab", 51: "delete", 117: "forward_delete", 53: "escape",
@@ -234,7 +238,11 @@ def build_steps(events: list[dict]) -> list[dict]:
             base = {"t_start": down["t"], "t_end": t, "ctx": down.get("ctx"), "x": down["x"], "y": down["y"],
                     "crop": down.get("crop"), "crop_rect": down.get("crop_rect"),
                     "ref": down.get("ref"), "mods": down.get("mods") or []}
-            if ((ev["x"] - down["x"]) ** 2 + (ev["y"] - down["y"]) ** 2) ** 0.5 > DRAG_PX:
+            moved = ((ev["x"] - down["x"]) ** 2 + (ev["y"] - down["y"]) ** 2) ** 0.5
+            # A hand that slips a few pixels on a button is clicking it, not dragging it, and a
+            # plan that says "drag the Continue button" is one an agent will try to obey.
+            slipped = moved <= CLICK_SLOP_PX and _el(down.get("ctx")).get("role") in CLICKY_ROLES
+            if moved > DRAG_PX and not slipped:
                 b.add({**base, "action": "drag", "to": [ev["x"], ev["y"]]})
                 continue
             right = down.get("button") == "right" or (down.get("button") == "left" and "ctrl" in base["mods"])
@@ -453,7 +461,8 @@ def describe(step: dict) -> str:
         text += f' -> "{tg.get("element")}" becomes {_toggle_word(tg.get("to"))}'
     if eff.get("progress"):
         p = eff["progress"]
-        text += f" -> progress {p.get('from') or '?'} -> {p.get('to')}"
+        text += (f" -> progress {p['from']} -> {p['to']}" if p.get("from")
+                 else f" -> progress now {p.get('to')}")
     if eff.get("app"):
         text += f" -> switches to {eff['app']}"
     if (step.get("container_context") or {}).get("list_item_index") is not None:
