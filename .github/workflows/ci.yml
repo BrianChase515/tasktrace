@@ -16,6 +16,6 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev,mcp]"
       - run: pytest -q
-      - name: Import the macOS recorder (no permissions needed to import)
+      - name: Import the macOS recorder and driver (no permissions needed to import)
         if: runner.os == 'macOS'
-        run: python -c "import tasktrace.recorder_macos as r; print(len(r.DEFAULT_EXCLUDED), 'excluded apps')"
+        run: python -c "import tasktrace.recorder_macos, tasktrace.drivers.macos; print('macOS modules import ok')"

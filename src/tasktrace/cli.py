@@ -62,7 +62,129 @@ def main(argv: list[str] | None = None) -> int:
     doc.add_argument("--request", action="store_true", help="prompt for missing permissions")
     sub.add_parser("mcp", help="run the MCP server (stdio)")
 
+    # ---- the human-supervised loop: plan -> replay -> review -> revise
+    pl = sub.add_parser("plan", help="turn a trace into a version-1 plan (no AI needed)")
+    pl.add_argument("trace")
+    pl.add_argument("--set", action="append", default=[], metavar="NAME=VALUE", help="parameter value")
+    pl.add_argument("-o", "--output")
+
+    va = sub.add_parser("validate", help="check a plan before running it")
+    va.add_argument("plan")
+
+    pr = sub.add_parser("prompt", help="print a prompt so any AI can author or revise a plan")
+    prs = pr.add_subparsers(dest="role", required=True)
+    pa = prs.add_parser("author", help="write a plan from a trace")
+    pa.add_argument("trace")
+    pa.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
+    pa.add_argument("--as", dest="who", default="<your name>", help="name the AI should sign as")
+    pv = prs.add_parser("revise", help="write the next plan version from an audit")
+    pv.add_argument("plan")
+    pv.add_argument("audit")
+    pv.add_argument("--as", dest="who", default="<your name>")
+
+    rp = sub.add_parser("replay", help="run a plan here while you watch; writes an audit")
+    rp.add_argument("plan")
+    rp.add_argument("--mode", choices=["step", "watch", "dry-run"], default="step",
+                    help="step: confirm every step (default). watch: confirm consequential steps only. "
+                         "dry-run: only check every target can be found")
+    rp.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
+    rp.add_argument("--driver", default="auto", choices=["auto", "macos", "fake"])
+    rp.add_argument("--allow-abs", action="store_true", help="allow raw screen coordinates as a last resort")
+    rp.add_argument("--audit-dir", help="default: an audits/ folder next to the plan")
+
+    rv = sub.add_parser("review", help="triage an audit and route each problem")
+    rv.add_argument("audit")
+    rv.add_argument("--plan", help="the plan that was run (adds target details)")
+
+    hi = sub.add_parser("history", help="show who generated each plan version in a folder")
+    hi.add_argument("folder")
+
     args = ap.parse_args(argv)
+
+    def _values(pairs: list[str]) -> dict:
+        out = {}
+        for p in pairs:
+            k, _, v = p.partition("=")
+            out[k.strip()] = v
+        return out
+
+    def _load(path: str) -> dict:
+        return json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+
+    def _write(obj: dict, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(obj, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        return path
+
+    if args.cmd == "plan":
+        from .plan import make_plan, missing_values
+        tp = resolve_trace(args.trace)
+        plan = make_plan(_load(str(tp)), _values(args.set), source=tp.parent.name)
+        out = _write(plan, Path(args.output) if args.output else tp.parent / "plans" / f"{plan['plan_id']}-v1.json")
+        print(f"Wrote {out} ({len(plan['steps'])} steps)")
+        miss = missing_values(plan)
+        if miss:
+            print("Values still needed (pass --set, or you'll be asked at replay): " + ", ".join(miss))
+        return 0
+
+    if args.cmd == "validate":
+        from .plan import validate_plan
+        errs = validate_plan(_load(args.plan))
+        print("OK" if not errs else "\n".join(f"- {e}" for e in errs))
+        return 0 if not errs else 1
+
+    if args.cmd == "prompt":
+        from .prompts import author_prompt, revise_prompt
+        from .review import triage
+        if args.role == "author":
+            print(author_prompt(_load(str(resolve_trace(args.trace))), _values(args.set), args.who))
+        else:
+            plan, audit = _load(args.plan), _load(args.audit)
+            print(revise_prompt(plan, audit, triage(audit, plan), args.who))
+        return 0
+
+    if args.cmd == "replay":
+        from .drivers import get_driver
+        from .plan import validate_plan
+        from .replay import Executor, TerminalUI
+        plan_path = Path(args.plan).expanduser()
+        plan = _load(str(plan_path))
+        errs = validate_plan(plan)
+        if errs:
+            print("Plan failed validation, not running it:\n" + "\n".join(f"- {e}" for e in errs), file=sys.stderr)
+            return 1
+        plan.setdefault("values", {}).update(_values(args.set))
+        author = plan.get("author") or {}
+        print(f"Plan {plan['plan_id']} v{plan['version']} by {author.get('name')} ({author.get('kind')}), "
+              f"{len(plan['steps'])} steps, mode={args.mode}")
+        audit_dir = Path(args.audit_dir) if args.audit_dir else plan_path.parent / "audits"
+        ex = Executor(plan, get_driver(args.driver), TerminalUI(), mode=args.mode, audit_dir=audit_dir,
+                      allow_abs=args.allow_abs)
+        audit = ex.run()
+        print(f"\nResult: {audit['result']}  {audit['summary']['outcomes']}")
+        print(f"Audit: {audit_dir / (audit['audit_id'] + '.json')}")
+        print(f"Next: tasktrace review {audit_dir / (audit['audit_id'] + '.json')} --plan {plan_path}")
+        return 0
+
+    if args.cmd == "review":
+        from .review import triage
+        audit = _load(args.audit)
+        rep = triage(audit, _load(args.plan) if args.plan else None)
+        out = _write(rep, Path(args.audit).with_name(Path(args.audit).stem + ".review.json"))
+        print(f"Verdict: {rep['verdict']}   ({rep['next']})")
+        for f in rep["findings"]:
+            extra = f"  \"{f['human_comment']}\"" if f.get("human_comment") else ""
+            print(f"  {f['id']} [{f['severity']}] step {f['step']} {f['category']} -> {f['route_to']}: "
+                  f"{f['summary']}{extra}")
+        print(f"Wrote {out}")
+        return 0
+
+    if args.cmd == "history":
+        from .review import lineage
+        plans = [json.loads(p.read_text(encoding="utf-8")) for p in Path(args.folder).expanduser().glob("*.json")]
+        plans = [p for p in plans if str(p.get("schema", "")).startswith("tasktrace-plan")]
+        print("\n".join(lineage(plans)) or "No plans found.")
+        return 0
 
     if args.cmd in ("record", "doctor") and sys.platform != "darwin":
         print("Recording needs macOS. You can still compile, diff and serve traces here.", file=sys.stderr)

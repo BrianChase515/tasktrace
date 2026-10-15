@@ -7,6 +7,10 @@ every click, keystroke and window change, with *what you clicked* (not just wher
 *which values change from run to run*, and *why* — in your own words. Hand that file to Claude (or serve it
 over MCP) and the agent has what it needs to do the task itself.
 
+Then close the loop: **any AI writes a plan, a local executor runs it while you watch, every step is
+audited, and your corrections are triaged back to the AI** for the next version. The AI never needs
+access to your mouse, so it works even with a locked-down corporate assistant.
+
 Local-first. Nothing leaves your machine. Password fields are never recorded.
 
 ```
@@ -128,6 +132,68 @@ Permissions apply to the app that runs Python (Terminal, iTerm, VS Code). Restar
 
 Tools: `list_traces`, `get_outline`, `get_trace`, `get_step_image`. Read-only.
 
+## The supervised loop: AI writes, a script runs, you judge, AI revises
+
+Most AI assistants at work can't touch your computer, and you wouldn't want an unsupervised one to.
+tasktrace splits the job so no single party has to be trusted with everything:
+
+```
+  trace ──> AUTHOR (any AI) ──> plan v1 ──> EXECUTOR (no AI, on your Mac) ──> audit
+              ^                                   │  you confirm, skip, take over,
+              │                                   │  or say "that was wrong because..."
+              │                                   v
+   plan v2 <── REVISER (any AI) <── review: each problem triaged and routed
+                                       author · executor · human · re-record
+```
+
+| Role | Who | What it can do |
+|---|---|---|
+| Author / reviser | Any AI: Claude, Copilot, a local model | Reads a trace, writes a plan file. Text only. |
+| Executor | `tasktrace replay` | Finds targets, clicks and types, checks each step's effect. No AI inside. |
+| Operator | You | Gates steps, types secrets, takes over, writes corrections. Your word is ground truth. |
+| Triage | `tasktrace review` | Classifies every problem and routes it to whoever can fix it. |
+
+```bash
+tasktrace plan q3-report --set report_title="Q4 forecast" --set period_end=2026-12-31
+#   or let an AI write it:  tasktrace prompt author q3-report --as Copilot  (paste, save its JSON reply)
+tasktrace validate plan.json
+tasktrace replay plan.json                 # step mode: you approve each step
+tasktrace review audits/<audit>.json --plan plan.json
+tasktrace prompt revise plan.json audits/<audit>.json --as Copilot   # paste to get v2
+tasktrace history plans/                   # who generated each version, and why it changed
+```
+
+What a session looks like (step 5's value was wrong, and the "Create" button had been renamed):
+
+```
+[5] Type {period_end} (e.g. "2026-09-30") into text field "Period end"  [value: '2026-12-31']
+     found by element
+     note: Always use the last day of the quarter
+     [Enter] run   s skip   m I'll do it   q stop >
+     look right? [Enter] yes, or type what went wrong > Period end must be the fiscal quarter end, 2027-01-31
+
+[7] Your turn (secret: you type it, it is never recorded): Type [secret] into password field "Approval PIN"
+
+[8] Click button "Create" -> closes "Report Wizard"  [consequential]
+     found by rel_xy  <- position only, check the pointer target
+
+$ tasktrace review audits/q3-report-v1-20261015-104512.json
+Verdict: revise
+  F1 [high] step 5 human_correction -> author  "Period end must be the fiscal quarter end, 2027-01-31"
+  F2 [low]  step 8 fragile_locator  -> author
+```
+
+**Accountability is built into the files.** Every plan names its author (tool, AI model or human),
+version, parent and a changelog where each change cites the review finding it fixes. Every audit records
+the plan and author it ran, the operator, which locator matched, what was expected versus what happened,
+before/after screenshots, and every human verdict.
+
+**Safety rails.** Step mode confirms every step. Watch mode still stops for anything that saves, submits,
+sends, deletes, pays or creates, and for any target found only by position. A typo at a prompt re-asks; it
+never means "go". Raw screen coordinates are off unless you pass `--allow-abs`. `--mode dry-run` checks
+that every target can be found without touching anything. If an expected window doesn't appear, the run
+stops instead of guessing.
+
 ## How it works
 
 ```
@@ -137,6 +203,9 @@ recorder_macos.py     CGEventTap (listen-only) ─┐
 compile.py            events ─> steps ─> effects ─> notes ─> parameters ─> redaction ─> trace.json
 diff.py               align two traces ─> confirmed variables / constants / optional steps
 mcp_server.py         trace.json ─> MCP tools
+plan.py / prompts.py  trace ─> plan (deterministic, or any AI via prompt) with author + lineage
+replay.py             plan ─> locator ladder ─> drivers/macos.py (AXPress, CGEvent) ─> audit
+review.py             audit ─> findings routed to author / executor / human / trace
 ```
 
 The raw run is kept, so traces can be recompiled as the compiler improves. The format is specified in
@@ -144,8 +213,12 @@ The raw run is kept, so traces can be recompiled as the compiler improves. The f
 
 ## Status and limitations
 
-Alpha. The compiler, diff, redaction and MCP server are covered by tests (`pytest`); the recorder is
-macOS-only and depends on what each app exposes through accessibility.
+Alpha. The compiler, diff, redaction, MCP server and the whole plan → replay → audit → review loop are
+covered by tests (`pytest`), the loop against a simulated app (`drivers/fake.py`). The recorder and the
+macOS driver depend on what each app exposes through accessibility.
+
+On a work machine, check your IT policy before running anything that records input or controls the
+mouse and keyboard. Step mode's per-step approval makes that conversation easier.
 
 - **Electron and some web apps** expose thin accessibility trees; OCR and relative position carry more weight there.
 - **Click crops are taken just after the click** (via `screencapture`), so a button that closes its window may
@@ -158,7 +231,8 @@ macOS-only and depends on what each app exposes through accessibility.
 
 - ScreenCaptureKit ring buffer for true *before*-click crops
 - Browser DOM capture (selectors) via an extension for web steps
-- Replay harness that drives a trace through Claude computer use and scores it against `success_criteria`
+- On-screen overlay for step mode (approve and comment without switching to the terminal)
+- MCP tools for the loop, so an agent can request a replay and read its audit
 - Windows recorder (UI Automation) emitting the same format
 
 ## Development
