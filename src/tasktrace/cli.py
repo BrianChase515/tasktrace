@@ -106,6 +106,15 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--ask-always", metavar="QUESTION", help="always stop and ask this one")
     an.add_argument("--path", help="answer bank file (default: answers.json in your TaskTrace folder)")
 
+    ru = sub.add_parser("run", help="run a Python script written against tasktrace.kit")
+    ru.add_argument("script")
+    ru.add_argument("--mode", choices=["step", "watch", "dry-run"], default="watch",
+                    help="watch: confirm consequential steps only (default). step: confirm everything. "
+                         "dry-run: look, don't touch")
+    ru.add_argument("--driver", default="auto", choices=["auto", "macos", "fake"])
+    ru.add_argument("--audit-dir", help="default: a runs/ folder in your TaskTrace folder")
+    ru.add_argument("--quiet", action="store_true", help="no sound when the run needs you")
+
     rv = sub.add_parser("review", help="triage an audit and route each problem")
     rv.add_argument("audit")
     rv.add_argument("--plan", help="the plan that was run (adds target details)")
@@ -210,6 +219,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Audit: {audit_dir / (audit['audit_id'] + '.json')}")
         print(f"Next: tasktrace review {audit_dir / (audit['audit_id'] + '.json')} --plan {plan_path}")
         return 0
+
+    if args.cmd == "run":
+        from . import kit
+        if args.quiet:
+            from . import alert
+            alert.set_enabled(False)
+        script = Path(args.script).expanduser()
+        if not script.exists():
+            print(f"No such script: {script}", file=sys.stderr)
+            return 1
+        print(f"Running {script.name} (mode={args.mode}). ctrl+C stops it.")
+        audit = kit.run_script(script, mode=args.mode, driver=args.driver,
+                               audit_dir=Path(args.audit_dir) if args.audit_dir else None)
+        if not audit:
+            print("The script finished without opening a session.")
+            return 0
+        print(f"\nResult: {audit['result']}  {audit['summary']['outcomes']}")
+        path = Path(audit_path) if (audit_path := args.audit_dir) else None
+        print(f"Audit: {(path or (home() / 'runs')) / (audit['audit_id'] + '.json')}")
+        return 0 if audit["result"] == "ok" else 1
 
     if args.cmd == "review":
         from .review import triage

@@ -196,6 +196,47 @@ Permissions apply to the app that runs Python (Terminal, iTerm, VS Code). Restar
 
 Tools: `list_traces`, `get_outline`, `get_trace`, `get_step_image`. Read-only.
 
+## Trace in, script out
+
+A plan is a list of steps, and a list has no `if` and no `while`. Hand an AI a trace and it can
+write something better: an ordinary Python script with real loops, against the accessibility tree.
+No model runs when the script runs. Nothing leaves the machine.
+
+```python
+from tasktrace.kit import Session
+
+with Session("Google Chrome", window="LinkedIn") as s:
+    for job in s.rows():                                 # whatever is in the list today
+        s.open(job)
+        if s.page_says("job match is high", "top applicant"):
+            s.click(s.find("AXButton", starts_with="Easy Apply"))
+            break
+
+    while s.running:                                     # however many pages this form has
+        page = s.form()
+        for control in page.empty():
+            s.answer(control)                            # from the answer bank, or ask once
+        if page.button("Review your application"):
+            break
+        s.click(page.button("Continue to next step", "Next"))
+        s.settle()
+
+    s.click(s.form().button("Submit application"), consequential=True)   # always asks you
+```
+
+```bash
+tasktrace run examples/linkedin_easy_apply.py --mode watch   # or --mode dry-run to look only
+```
+
+`s.form()` is the page as it is right now — every field, its label and its current value.
+`s.answer()` fills from the answer bank or rings a bell and asks you, once. `s.click(...,
+consequential=True)` always stops for a human. Every run writes the same audit as a plan does, so
+`tasktrace review` works on it. A script that hits something it doesn't understand calls
+`s.give_up("...")` and hands you the keyboard rather than guessing.
+
+The full example is [`examples/linkedin_easy_apply.py`](examples/linkedin_easy_apply.py): 90 lines
+that apply to any badged job on any employer's form.
+
 ## The supervised loop: AI writes, a script runs, you judge, AI revises
 
 Most AI assistants at work can't touch your computer, and you wouldn't want an unsupervised one to.

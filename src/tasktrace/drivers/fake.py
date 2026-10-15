@@ -142,7 +142,7 @@ class FakeDriver(Driver):
         controls = [{**c, "handle": (self.page, i)} for i, c in enumerate(pages[self.page])]
         last = self.page == len(pages) - 1
         label = self.finish_label if last else self.advance_label
-        return {"controls": controls, "buttons": [{"title": label, "handle": ("btn", self.page)}],
+        return {"controls": controls, "buttons": [{"role": "AXButton", "title": label, "handle": ("btn", self.page)}],
                 "progress": f"{int(100 * self.page / max(1, len(pages) - 1))} percent"}
 
     def fill(self, control, value):
@@ -155,7 +155,8 @@ class FakeDriver(Driver):
         form = self._form_pages(step)
         row = getattr(self, "opened_row", None)
         if row and row.get("button"):  # an opened row's panel brings its own buttons
-            form["buttons"] = form["buttons"] + [{"title": row["button"], "handle": ("apply", row["index"])}]
+            form["buttons"] = form["buttons"] + [
+                {"role": "AXButton", "title": row["button"], "handle": ("apply", row["index"])}]
         return form
 
     def press(self, control):

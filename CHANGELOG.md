@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0
+
+**Traces now compile into real scripts, and TaskTrace can run them.**
+
+A plan is a list of steps. A list has no "if" and no "while", so every kind of variation had to be
+anticipated and built into the executor by hand — which is why one job application took four
+releases. `tasktrace.kit` is the other half: an API small enough for an AI to write an ordinary
+Python script against, and that script then runs by itself. No model runs during the run. Nothing
+leaves the machine.
+
+- `Session`: brings the app forward, exposes its page, and gives a script eyes (`form()`, `rows()`,
+  `page_says()`, `find()`, `wait_for()`) and hands (`click()`, `fill()`, `open()`, `answer()`).
+- `s.answer(control)` fills from the answer bank, or rings a bell and asks you — once, ever.
+- `s.click(..., consequential=True)` always asks a person, in every mode.
+- `s.give_up("...")` hands you the keyboard instead of guessing, and says why in the audit.
+- Every run writes the same audit a plan does, so `tasktrace review` reads it unchanged.
+- `tasktrace run <script.py> [--mode step|watch|dry-run]`.
+
+`examples/linkedin_easy_apply.py` is the first one: 90 lines that open jobs until one is badged a
+strong match, then work whatever form that employer uses, however many pages it has. The test
+suite runs that exact file against a simulated job board, so the example cannot rot.
+
 ## 0.7.1
 
 Three things stopped the first 0.7.0 run dead, all of them mine:
