@@ -39,10 +39,15 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN
 # A self-signed certificate has to be trusted for code signing before codesign will use it.
 sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$WORK/cert.pem"
 security find-identity -v -p codesigning "$KEYCHAIN"
+# Sign by exact fingerprint, so another certificate with the same name can never be picked by mistake.
+FINGERPRINT="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/"'"$IDENTITY"'"/ {print $2; exit}')"
+[ -n "$FINGERPRINT" ] || { echo "No signing identity found in $KEYCHAIN"; exit 1; }
+echo "Signing as $FINGERPRINT"
 
-codesign --force --deep --timestamp=none --keychain "$KEYCHAIN" --sign "$IDENTITY" "$APP"
+codesign --force --deep --timestamp=none --keychain "$KEYCHAIN" --sign "$FINGERPRINT" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "Designated requirement (what macOS checks to keep permissions):"
 codesign -d -r- "$APP" 2>&1 | grep designated
 
+security delete-keychain "$KEYCHAIN" || true
 rm -rf "$WORK"
