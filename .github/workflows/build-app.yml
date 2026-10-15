@@ -57,10 +57,25 @@ jobs:
 
       - name: Dialog check (click every button like a person)
         run: |
-          open -W packaging/dist/TaskTrace.app --args --ui-check "$PWD/uicheck.json"
-          echo "--- dialog check ---" | tee -a build.log
-          cat uicheck.json | tee -a build.log
-          python -c "import json,sys; r=json.load(open('uicheck.json')); sys.exit(0 if r.get('current_code_ok') else 1)"
+          mkdir -p shots
+          # The build machine's own shell may click and take screenshots; take some while the check runs.
+          ( for i in $(seq -w 1 30); do screencapture -x "shots/screen-$i.png"; sleep 4; done ) &
+          SHOOTER=$!
+          echo "--- dialog check: launched like a person would (open) ---" | tee -a build.log
+          open -W packaging/dist/TaskTrace.app --args --ui-check "$PWD/uicheck-open.json"
+          cat uicheck-open.json | tee -a build.log
+          echo "--- dialog check: run directly from the build shell ---" | tee -a build.log
+          TASKTRACE_UICHECK_SHOTS="$PWD/shots" packaging/dist/TaskTrace.app/Contents/MacOS/TaskTrace --ui-check "$PWD/uicheck-direct.json" || true
+          cat uicheck-direct.json | tee -a build.log
+          kill $SHOOTER || true
+          ( cd shots && zip -q ../dialog-screens.zip *.png ) || true
+          python - <<'PY'
+          import json, sys
+          runs = [json.load(open(f)) for f in ("uicheck-open.json", "uicheck-direct.json")]
+          usable = [r for r in runs if r.get("can_post_clicks")]
+          print("runs where the test could click:", len(usable))
+          sys.exit(0 if usable and all(r.get("current_code_ok") for r in usable) else 1)
+          PY
 
       - name: Make .dmg
         run: |
@@ -105,7 +120,7 @@ jobs:
         if: failure()
         run: |
           touch build.log
-          [ -f uicheck.json ] && { echo "--- dialog check ---"; cat uicheck.json; } >> build.log || true
           gh release delete build-log --yes --cleanup-tag || true
-          gh release create build-log build.log --prerelease --target "$GITHUB_SHA" \
+          FILES="build.log"; [ -f dialog-screens.zip ] && FILES="$FILES dialog-screens.zip"
+          gh release create build-log $FILES --prerelease --target "$GITHUB_SHA" \
             --title "Failed build log" --notes "Build log from a failed app build of $GITHUB_SHA."

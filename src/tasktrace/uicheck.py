@@ -85,6 +85,10 @@ def run_scenario(name: str, show, button: str) -> dict:
             return
         state["found"] = True
         state["front_app_before_click"] = _front_app_name()
+        shots = os.environ.get("TASKTRACE_UICHECK_SHOTS")
+        if shots:
+            safe = "".join(c if c.isalnum() else "-" for c in name)
+            subprocess.run(["screencapture", "-x", os.path.join(shots, f"{safe}.png")], capture_output=True)
         time.sleep(0.4)
         for _ in range(MAX_CLICKS):
             if state["done"]:
@@ -139,7 +143,12 @@ def run_all(out_path: str) -> None:
     scen("new: another app in front", lambda: alert("Step 3", "", ("Run it", "Stop"))[0], "Run it")
     scen("new: next dialog after that", lambda: alert("Step 4", "", ("Run it", "Stop"))[0], "Stop")
 
-    report = {"macos": platform.mac_ver()[0], "scenarios": results,
+    from ApplicationServices import AXIsProcessTrusted
+    pre_post = getattr(Quartz, "CGPreflightPostEventAccess", None)
+    report = {"macos": platform.mac_ver()[0],
+              "can_read_ui": bool(AXIsProcessTrusted()),
+              "can_post_clicks": bool(pre_post()) if pre_post else None,
+              "scenarios": results,
               "current_code_ok": all(r.get("ok") for r in results if r["name"].startswith("new"))}
     with open(out_path, "w") as f:
         json.dump(report, f, indent=1)
