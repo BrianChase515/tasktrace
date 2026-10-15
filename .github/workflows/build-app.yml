@@ -1,7 +1,9 @@
 name: build-app
 
-# Builds TaskTrace.app (with its own Python inside), wraps it in a .dmg, and
-# publishes it as the "latest" pre-release so anyone can download it.
+# Builds TaskTrace.app (with its own Python inside), signs it with the project certificate,
+# checks that its dialogs respond to a real click and that in-app updates work, wraps it in
+# a .dmg, and publishes it as the "latest" download (plus latest.json for in-app updates).
+# Nothing is published unless every check passes.
 
 on:
   push:
@@ -31,6 +33,7 @@ jobs:
 
       - name: Install
         run: |
+          sw_vers | tee -a build.log
           python -m pip install --upgrade pip 2>&1 | tee -a build.log
           pip install py2app Pillow . 2>&1 | tee -a build.log
 
@@ -42,11 +45,22 @@ jobs:
         working-directory: packaging
         run: python setup_app.py py2app 2>&1 | tail -n 200 | tee -a ../build.log
 
-      - name: Sign (ad-hoc) and self-test
+      - name: Sign with the TaskTrace certificate
+        env:
+          TASKTRACE_SIGNING_P12: ${{ secrets.TASKTRACE_SIGNING_P12 }}
         run: |
-          APP=packaging/dist/TaskTrace.app
-          codesign --force --deep --sign - "$APP" 2>&1 | tee -a build.log
-          "$APP/Contents/MacOS/TaskTrace" --self-test 2>&1 | tee -a build.log
+          bash packaging/sign.sh packaging/dist/TaskTrace.app 2>&1 | tee -a build.log
+          echo "SIGNING=$(cat signing-mode.txt)" >> "$GITHUB_ENV"
+
+      - name: Self-test
+        run: packaging/dist/TaskTrace.app/Contents/MacOS/TaskTrace --self-test 2>&1 | tee -a build.log
+
+      - name: Dialog check (click every button like a person)
+        run: |
+          open -W packaging/dist/TaskTrace.app --args --ui-check "$PWD/uicheck.json"
+          echo "--- dialog check ---" | tee -a build.log
+          cat uicheck.json | tee -a build.log
+          python -c "import json,sys; r=json.load(open('uicheck.json')); sys.exit(0 if r.get('current_code_ok') else 1)"
 
       - name: Make .dmg
         run: |
@@ -56,13 +70,31 @@ jobs:
           hdiutil create -volname "TaskTrace" -srcfolder dmg -ov -format UDZO "TaskTrace.dmg" 2>&1 | tee -a build.log
           du -h "TaskTrace.dmg" | tee -a build.log
 
+      - name: Update check (install over itself, refuse a foreign or corrupted build)
+        run: |
+          echo "--- update check ---" | tee -a build.log
+          python packaging/update_check.py packaging/dist/TaskTrace.app TaskTrace.dmg 2>&1 | tee -a build.log
+
       - name: Publish as the "latest" download
         run: |
+          python - <<'PY'
+          import hashlib, json, os
+          info = {
+              "version": os.environ["VERSION"],
+              "sha256": hashlib.sha256(open("TaskTrace.dmg", "rb").read()).hexdigest(),
+              "dmg": "https://github.com/BrianChase515/tasktrace/releases/download/latest/TaskTrace.dmg",
+              "signing": os.environ["SIGNING"],
+              "built_from": os.environ["GITHUB_SHA"],
+          }
+          json.dump(info, open("latest.json", "w"), indent=1)
+          print(json.dumps(info, indent=1))
+          PY
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest "TaskTrace.dmg" build.log \
+          gh release create latest "TaskTrace.dmg" latest.json build.log \
             --prerelease --target "$GITHUB_SHA" \
             --title "TaskTrace $VERSION (latest build)" \
             --notes "Download **TaskTrace.dmg** (version $VERSION), open it, and drag TaskTrace into Applications.
+          Already have TaskTrace? Use **Check for updates…** in its menu instead.
 
           First launch: macOS will say it can't verify the developer (this build isn't signed with a paid Apple Developer ID).
           Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to TaskTrace. You only do this once.
@@ -73,6 +105,7 @@ jobs:
         if: failure()
         run: |
           touch build.log
+          [ -f uicheck.json ] && { echo "--- dialog check ---"; cat uicheck.json; } >> build.log || true
           gh release delete build-log --yes --cleanup-tag || true
           gh release create build-log build.log --prerelease --target "$GITHUB_SHA" \
             --title "Failed build log" --notes "Build log from a failed app build of $GITHUB_SHA."

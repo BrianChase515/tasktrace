@@ -28,7 +28,7 @@ from AppKit import (
 from Foundation import NSURL, NSFileManager, NSMakeRect
 from PyObjCTools import AppHelper
 
-from . import __version__, permissions
+from . import __version__, permissions, updater
 from .appcore import REPO_URL, parse_json_reply, plan_dir_for, plan_filename, result_summary, run_label, trace_for_ai
 from .compile import compile_run, write_trace
 from .paths import home, list_runs
@@ -72,11 +72,34 @@ def on_main(fn, *args, **kwargs):
     return box["value"]
 
 
+_POLICY_REGULAR = 0    # NSApplicationActivationPolicyRegular
+_POLICY_ACCESSORY = 1  # NSApplicationActivationPolicyAccessory
+_MODAL_LEVEL = 8       # NSModalPanelWindowLevel
+_ALL_SPACES = (1 << 0) | (1 << 8)  # show on every Space, including over full-screen apps
+
+
+def _activate(app) -> None:
+    """Bring TaskTrace forward. macOS 14+ ignores activateIgnoringOtherApps:, so use activate there."""
+    try:
+        app.activate()
+    except AttributeError:  # macOS 13
+        app.activateIgnoringOtherApps_(True)
+
+
 def alert(title: str, text: str = "", buttons=("OK",), field: str | None = None,
           placeholder: str = "") -> tuple[int, str | None]:
-    """A native dialog. Returns (index of the button clicked, text typed if there was a field)."""
+    """A native dialog. Returns (index of the button clicked, text typed if there was a field).
+
+    A menu-bar-only app (LSUIElement) has no normal activation, so its alert window isn't made
+    key automatically and the buttons swallow the first clicks. We switch the app to a regular
+    activation policy for the life of the dialog and force its window to the front and key, so
+    the first click lands, then switch back.
+    """
     app = NSApplication.sharedApplication()
-    app.activateIgnoringOtherApps_(True)
+    prev_policy = app.activationPolicy()
+    if prev_policy != _POLICY_REGULAR:
+        app.setActivationPolicy_(_POLICY_REGULAR)
+    _activate(app)
     a = NSAlert.alloc().init()
     a.setMessageText_(title)
     a.setInformativeText_(text)
@@ -89,11 +112,20 @@ def alert(title: str, text: str = "", buttons=("OK",), field: str | None = None,
         tf.setPlaceholderString_(placeholder)
         a.setAccessoryView_(tf)
         a.window().setInitialFirstResponder_(tf)
-    choice = int(a.runModal()) - 1000  # NSAlertFirstButtonReturn == 1000
+    win = a.window()
+    win.setLevel_(_MODAL_LEVEL)
+    win.setCollectionBehavior_(_ALL_SPACES)
+    win.center()
+    win.makeKeyAndOrderFront_(None)
+    win.orderFrontRegardless()
+    try:
+        choice = int(a.runModal()) - 1000  # NSAlertFirstButtonReturn == 1000
+    finally:
+        if prev_policy != _POLICY_REGULAR:
+            app.setActivationPolicy_(prev_policy)
     if choice < 0:  # dismissed by the stop hotkey: treat as the last button, which is always the safe one
         choice = len(buttons) - 1
     typed = str(tf.stringValue()) if tf is not None else None
-    app.hide_(None)  # hand focus back to whatever the person was working in
     return choice, typed
 
 
@@ -190,6 +222,9 @@ class TaskTraceApp(rumps.App):
         self._ticker.start()
         self._first = rumps.Timer(self._first_launch, 1.0)
         self._first.start()
+        self._updating = False
+        self._update_timer = rumps.Timer(lambda _: self.check_for_updates(None, quiet=True), 6 * 3600)
+        self._update_timer.start()
 
     # ---- state & menu
     def _state(self) -> dict:
@@ -246,15 +281,33 @@ class TaskTraceApp(rumps.App):
             self._recent_menu(),
             rumps.MenuItem("Run a plan from clipboard…", callback=None if (self.rec or self.busy) else self.run_from_clipboard),
             rumps.separator,
-            rumps.MenuItem("Permissions: all set" if not permissions.missing() else "⚠ Set up permissions…",
-                           callback=self.setup_permissions),
+            self._permissions_menu(),
             rumps.MenuItem("Open recordings folder", callback=lambda _: self._open_folder()),
+            rumps.MenuItem("Check for updates…", callback=self.check_for_updates),
             rumps.MenuItem("How it works", callback=lambda _: subprocess.Popen(["open", REPO_URL])),
             rumps.separator,
             rumps.MenuItem(f"Quit TaskTrace {__version__}", callback=lambda _: rumps.quit_application()),
         ]
         self.menu.update(items)
         self._runs_sig = self._runs_signature()
+
+    def _permissions_menu(self) -> rumps.MenuItem:
+        st = permissions.status()
+        miss = [n for n in permissions.ORDER if st.get(n) is False]
+        root = rumps.MenuItem("Permissions: all set" if not miss else "⚠ Permissions")
+        for name in permissions.ORDER:
+            ok = st.get(name)
+            mark = "✓" if ok else ("✗" if ok is False else "?")
+            root.add(rumps.MenuItem(f"{mark} {permissions.PERMISSIONS[name]['title']}: open settings",
+                                    callback=lambda _, n=name: self._open_permission(n)))
+        root.add(rumps.separator)
+        root.add(rumps.MenuItem("Walk me through it…", callback=self.setup_permissions))
+        root.add(rumps.MenuItem("Restart TaskTrace (applies new permissions)", callback=lambda _: self._relaunch()))
+        return root
+
+    def _open_permission(self, name: str) -> None:
+        permissions.request(name)  # lists TaskTrace on that page if it isn't there yet
+        permissions.open_settings(name)
 
     def _runs_signature(self):
         return tuple(r["run"] for r in list_runs(30) if r.get("compiled"))
@@ -286,6 +339,7 @@ class TaskTraceApp(rumps.App):
             self._save_state(welcomed=True)
         if permissions.missing():
             self.setup_permissions(None, first_launch=True)
+        self.check_for_updates(None, quiet=True)
 
     def setup_permissions(self, _, first_launch: bool = False) -> bool:
         miss = permissions.missing()
@@ -335,6 +389,60 @@ class TaskTraceApp(rumps.App):
     def _require(self, *needed: str) -> bool:
         miss = [n for n in permissions.missing() if n in needed]
         return True if not miss else self.setup_permissions(None)
+
+    # ---- updates
+    def check_for_updates(self, _, quiet: bool = False) -> None:
+        if self._updating:
+            return
+
+        def work():
+            try:
+                info = updater.latest_info()
+            except Exception as exc:
+                if not quiet:
+                    AppHelper.callAfter(alert, "Couldn't check for updates", str(exc))
+                return
+            AppHelper.callAfter(self._offer_update, info, quiet)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _offer_update(self, info: dict, quiet: bool) -> None:
+        if not updater.is_newer(info["version"], __version__):
+            if not quiet:
+                alert("TaskTrace is up to date", f"You have version {__version__}, the newest.")
+            return
+        if self.rec is not None or self.busy:
+            return  # never interrupt a recording or a run; the next check will offer it again
+        if quiet and self._state().get("skip_version") == info["version"]:
+            return
+        keeps = info.get("signing") == "stable"
+        i, _ = alert(f"TaskTrace {info['version']} is available",
+                     f"You have {__version__}. Updating takes a few seconds and restarts TaskTrace."
+                     + ("\n\nYour permissions carry over." if keeps else
+                        "\n\nmacOS may ask you to switch the permissions on again after this one."),
+                     ("Update now", "Later", "Skip this version"))
+        if i == 2:
+            self._save_state(skip_version=info["version"])
+        if i != 0:
+            return
+        self._updating = True
+        app_path = Path(str(NSBundle.mainBundle().bundlePath()))
+        notify("Updating", f"Installing TaskTrace {info['version']}…")
+
+        def work():
+            try:
+                updater.install(info, app_path)
+            except Exception as exc:
+                AppHelper.callAfter(self._update_failed, str(exc))
+                return
+            AppHelper.callAfter(self._relaunch)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_failed(self, err: str) -> None:
+        self._updating = False
+        alert("The update didn't install", f"{err}\n\nTaskTrace is unchanged. You can also download the "
+              f"newest version from {REPO_URL}/releases")
 
     # ---- stopping a run
     def _is_stop_hotkey(self, event) -> bool:
@@ -576,6 +684,10 @@ def self_test() -> int:
 def main() -> None:
     if "--self-test" in sys.argv:
         raise SystemExit(self_test())
+    if "--ui-check" in sys.argv:
+        from .uicheck import main as ui_check
+        ui_check(sys.argv[sys.argv.index("--ui-check") + 1])
+        return
     TaskTraceApp().run()
 
 
