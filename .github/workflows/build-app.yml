@@ -64,6 +64,14 @@ jobs:
       - name: Self-test
         run: packaging/dist/TaskTrace.app/Contents/MacOS/TaskTrace --self-test 2>&1 | tee -a build.log
 
+      - name: First launch with no permissions (clicked from outside, like a real mouse)
+        run: |
+          echo "--- first launch with no permissions ---" | tee -a build.log
+          python packaging/real_launch_check.py packaging/dist/TaskTrace.app "$PWD/first-launch" 2>&1 | tee -a build.log \
+            || { echo "FIRST_LAUNCH_FAILED=1" >> "$GITHUB_ENV"; }
+          [ -f first-launch/sample.txt ] && { echo "--- where the app was stuck ---"; head -120 first-launch/sample.txt; } | tee -a build.log || true
+          ( cd first-launch && zip -q ../first-launch.zip * ) || true
+
       - name: Allow the dialog check to click (on this build machine only)
         run: |
           # The check posts real mouse clicks. On a person's Mac that needs their OK; here we grant it
@@ -91,14 +99,16 @@ jobs:
           kill $SHOOTER || true
           ( cd shots && zip -q ../dialog-screens.zip *.png ) || true
           gh release delete diagnostics --yes --cleanup-tag || true
-          gh release create diagnostics dialog-screens.zip uicheck-open.json uicheck-direct.json --prerelease \
+          gh release create diagnostics dialog-screens.zip uicheck-open.json uicheck-direct.json first-launch.zip --prerelease \
             --target "$GITHUB_SHA" --title "Build diagnostics" --notes "Screenshots and results from the dialog check." || true
           python - <<'PY'
-          import json, sys
+          import json, os, sys
           runs = [json.load(open(f)) for f in ("uicheck-open.json", "uicheck-direct.json")]
           usable = [r for r in runs if r.get("can_post_clicks")]
           print("runs where the test could click:", len(usable), "| normal launch could click:", runs[0].get("can_post_clicks"))
-          sys.exit(0 if usable and all(r.get("current_code_ok") for r in usable) else 1)
+          first_launch_ok = not os.environ.get("FIRST_LAUNCH_FAILED")
+          print("first launch with no permissions:", "ok" if first_launch_ok else "FAILED")
+          sys.exit(0 if usable and all(r.get("current_code_ok") for r in usable) and first_launch_ok else 1)
           PY
 
       - name: Make .dmg
