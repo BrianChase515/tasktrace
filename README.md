@@ -98,7 +98,7 @@ Review a trace before sharing it. Click crops are small, but they are screenshot
 
 ## Quickstart
 
-Requires macOS 13+ and Python 3.10+.
+Requires macOS 13+ and Python 3.9+ (the Python that ships with macOS works; the MCP server needs 3.10+).
 
 ```bash
 pip install "tasktrace[mcp,images] @ git+https://github.com/<you>/tasktrace"
