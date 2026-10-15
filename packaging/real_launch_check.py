@@ -63,11 +63,13 @@ def click(x, y):
         time.sleep(0.05)
 
 
-def main(app: str, out: str) -> int:
+def main(app: str, out: str, flags: str = "{}") -> int:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    state = Path.home() / "TaskTraces" / ".app-state.json"
-    state.unlink(missing_ok=True)  # behave like a first launch
+    home = Path.home() / "TaskTraces"
+    home.mkdir(exist_ok=True)
+    (home / ".app-state.json").unlink(missing_ok=True)  # behave like a first launch
+    (home / ".test-flags.json").write_text(flags)
     report = {"steps": []}
     shot = lambda name: subprocess.run(["screencapture", "-x", str(out / f"{name}.png")], capture_output=True)
 
@@ -128,8 +130,10 @@ def main(app: str, out: str) -> int:
     (out / "real-launch.json").write_text(json.dumps(report, indent=1))
     print(json.dumps(report, indent=1))
     subprocess.run(["kill", str(pid)])
+    time.sleep(2)
+    (home / ".test-flags.json").unlink(missing_ok=True)
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1], sys.argv[2]))
+    raise SystemExit(main(*sys.argv[1:4]))

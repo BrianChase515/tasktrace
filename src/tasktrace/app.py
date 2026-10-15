@@ -201,6 +201,14 @@ class DialogUI:
         return {"verdict": "rejected", "comment": text or "(no details given)", "stop": i == 2}
 
 
+def _test_flags() -> dict:
+    """Switches used only by the build's diagnostics (a file the build writes; absent for everyone else)."""
+    try:
+        return json.loads((home() / ".test-flags.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 # --------------------------------------------------------------------------- the app
 
 class TaskTraceApp(rumps.App):
@@ -209,10 +217,12 @@ class TaskTraceApp(rumps.App):
         self.rec = None
         self.busy = False
         self.executor = None
-        self._monitors = [
-            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey),
-            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey_local),
-        ]
+        self._monitors = []
+        if not _test_flags().get("no_key_monitors"):
+            self._monitors = [
+                NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey),
+                NSEvent.addLocalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey_local),
+            ]
         self._runs_sig = None
         self._rebuild()
         self._ticker = rumps.Timer(self._tick, 0.5)
