@@ -38,6 +38,28 @@ def _param_name(question: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(question).lower()).strip("_")[:40] or "answer"
 
 
+def _text_matches(text: str, phrases: list) -> bool:
+    """Does this text say any of these things?
+
+    Substring first, then every word of the phrase appearing somewhere in the text: a site
+    rarely prints the phrase a plan was written with. LinkedIn's own wording for a strong match
+    is "Job match is high, we can help you stand out", so "high match" has to find it.
+    """
+    import re
+    low = " ".join(str(text or "").lower().split())
+    words = set(re.findall(r"[a-z0-9']+", low))  # "high," is the word "high"
+    for phrase in phrases:
+        p = " ".join(str(phrase or "").lower().split())
+        if not p:
+            continue
+        if p in low:
+            return True
+        parts = [w for w in re.findall(r"[a-z0-9']+", p) if len(w) > 2]
+        if parts and all(w in words for w in parts):
+            return True
+    return False
+
+
 def _button(buttons: list, names: list) -> dict | None:
     """The first button whose name matches one the plan is looking for."""
     wanted = [n.strip().lower() for n in names]
@@ -301,6 +323,9 @@ class Executor:
         advance = step.get("advance") or DEFAULT_ADVANCE
         done_on = step.get("finish") or DEFAULT_FINISH
         pages, seen_progress = [], []
+        # Without this the browser is never asked to expose its page, and every form reads as
+        # empty: a web page is invisible to accessibility until something switches it on.
+        self.driver.prepare(step)
         for n in range(1, int(step.get("max_pages") or MAX_PAGES) + 1):
             if self._stop.is_set():
                 entry["pages"] = pages
@@ -325,6 +350,9 @@ class Executor:
             nxt = _button(buttons, advance)
             if nxt is None:
                 entry["pages"] = pages
+                if not form.get("controls") and not buttons:
+                    return hand_to_human("nothing readable on screen: is the form open, and is this "
+                                         "the right window?")
                 return hand_to_human("no button to continue with, and nothing that finishes the form")
             if self.mode == "dry-run":
                 entry["pages"] = pages
@@ -348,18 +376,27 @@ class Executor:
         return hand_to_human(f"still going after {len(pages)} pages")
 
     def _pick_list_item(self, step: dict, values: dict, entry: dict, finish, hand_to_human):
-        """Choose a row by what it says, not by where it sat the day it was recorded."""
-        want = [w.lower() for w in (step.get("require_any") or [])]
-        avoid = [w.lower() for w in (step.get("exclude_any") or [])]
+        """Choose a row by what it says, not by where it sat the day it was recorded.
+
+        With `inspect`, each candidate row is opened and judged on what the window then says.
+        That is for the common case where what you are choosing on isn't printed on the card:
+        a job list shows the title and the company, and only the panel that opens says whether
+        you would be a strong applicant.
+        """
+        want = step.get("require_any") or []
+        avoid = step.get("exclude_any") or []
         press = step.get("press") or {}
+        self.driver.prepare(step)
         items = self.driver.list_items(step)
         entry["scanned"] = len(items)
+        if step.get("inspect"):
+            return self._inspect_list(step, values, entry, finish, hand_to_human, items, want, avoid, press)
         matches = []
         for item in items:
-            text = (item.get("text") or "").lower()
-            if avoid and any(w in text for w in avoid):
+            text = item.get("text") or ""
+            if avoid and _text_matches(text, avoid):
                 continue
-            if want and not any(w in text for w in want):
+            if want and not _text_matches(text, want):
                 continue
             control = next((c for c in item.get("controls", [])
                             if _matches_control(c, press)), None)
@@ -367,7 +404,9 @@ class Executor:
                 matches.append((item, control))
         entry["matched"] = [{"index": i["index"], "text": (i.get("text") or "")[:200]} for i, _ in matches[:5]]
         if not matches:
-            return hand_to_human(f"nothing in the list matching {', '.join(step.get('require_any') or []) or 'the plan'}")
+            entry["sample"] = [(i.get("text") or "")[:160] for i in items[:3]]
+            return hand_to_human(f"nothing in the list says {' or '.join(want) or 'what the plan asked for'}"
+                                 " — the cards may not carry it; try inspect")
         if self.mode == "dry-run":
             return finish("would_run", True)
         item, control = matches[0]
@@ -383,6 +422,54 @@ class Executor:
         self._wait_effect(before, step.get("expect"))
         entry["chose"] = {"index": item["index"], "text": (item.get("text") or "")[:200]}
         return finish("ok", True)
+
+    def _inspect_list(self, step, values, entry, finish, hand_to_human, items, want, avoid, press):
+        """Open rows one at a time and take the first one that reads right."""
+        looked, limit = [], int(step.get("max_inspect") or 12)
+        for item in items[:limit]:
+            if self._stop.is_set():
+                entry["looked_at"] = looked
+                return finish("stopped", False)
+            text = item.get("text") or ""
+            if avoid and _text_matches(text, avoid):
+                continue
+            opener = next((c for c in item.get("controls", []) if _matches_control(c, step.get("open") or {})),
+                          None) or {"handle": item.get("handle"), "title": text[:60]}
+            if self.mode == "dry-run":
+                looked.append({"index": item["index"], "would_open": text[:120]})
+                continue
+            self.driver.press(opener)
+            time.sleep(max(self.poll, 0.6))
+            shown = self.driver.window_text(step)
+            hit = _text_matches(shown, want) if want else True
+            looked.append({"index": item["index"], "text": text[:120], "matched": bool(hit)})
+            if not hit:
+                continue
+            if avoid and _text_matches(shown, avoid):
+                continue
+            button = _button(self.driver.read_form(step).get("buttons", []),
+                             [press.get("title_prefix")] if press.get("title_prefix") else [])
+            if button is None:
+                continue  # badged, but there is no way to apply from here
+            if self.mode == "step" or step.get("consequential"):
+                ans = self.ui.confirm(step, f"Open and apply to: {text[:140]}", None)
+                if ans == "stop":
+                    entry["looked_at"] = looked
+                    return finish("stopped", False)
+                if ans == "skip":
+                    continue
+            if step.get("param"):
+                values[step["param"]] = text[:200]
+            before = self.driver.snapshot()
+            self.driver.press(button)
+            self._wait_effect(before, step.get("expect"))
+            entry["looked_at"] = looked
+            entry["chose"] = {"index": item["index"], "text": text[:200], "button": button.get("title")}
+            return finish("ok", True)
+        entry["looked_at"] = looked
+        if self.mode == "dry-run":
+            return finish("would_run", True)
+        return hand_to_human(f"looked at {len(looked)} jobs and none said {' or '.join(want)}")
 
     # ---- one step
     def _run_step(self, step: dict, values: dict) -> tuple[dict, bool]:

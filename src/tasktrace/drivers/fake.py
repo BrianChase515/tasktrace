@@ -125,11 +125,17 @@ class FakeDriver(Driver):
         self.pressed: list[str] = []
 
     def load_list(self, items: list[dict]) -> None:
-        """items = [{"text", "button"}]: rows with a button to press."""
+        """items = [{"text", "button", "detail", "detail_only"}].
+
+        `detail` is what the window says once the row is opened, and `detail_only` means the
+        button is only there — which is how a job board works: the badge and the apply button
+        live in the panel, not on the card.
+        """
         self.list_rows = [dict(i) for i in items]
         self.clicked_row: dict | None = None
+        self.opened_row: dict | None = None
 
-    def read_form(self, step):
+    def _form_pages(self, step):
         pages = getattr(self, "form_pages", None)
         if not pages or self.page >= len(pages):
             return {"controls": [], "buttons": [], "progress": None}
@@ -145,22 +151,41 @@ class FakeDriver(Driver):
         self.log.append(f"fill {control.get('title')!r} = {value!r}")
         return True
 
+    def read_form(self, step):
+        form = self._form_pages(step)
+        row = getattr(self, "opened_row", None)
+        if row and row.get("button"):  # an opened row's panel brings its own buttons
+            form["buttons"] = form["buttons"] + [{"title": row["button"], "handle": ("apply", row["index"])}]
+        return form
+
     def press(self, control):
-        handle = control.get("handle")
-        if isinstance(handle, tuple) and handle[0] == "btn":
+        kind, ref = control.get("handle", (None, None))
+        if kind == "btn":
             self.pressed.append(control["title"])
             if control["title"] != self.finish_label:
                 self.page += 1
-            return True
-        row = next((r for r in getattr(self, "list_rows", []) if r.get("button") == control.get("title")), None)
-        self.clicked_row = row
-        self.log.append(f"press {control.get('title')!r}")
+        elif kind == "row":  # opening a job shows its detail panel
+            self.opened_row = self.list_rows[ref]
+            self.log.append(f"open {self.list_rows[ref]['text'][:40]!r}")
+        elif kind == "apply":
+            self.clicked_row = self.list_rows[ref]
+            self.log.append(f"press {control.get('title')!r}")
         return True
 
     def list_items(self, step):
-        return [{"index": i, "text": r["text"],
-                 "controls": [{"role": "AXButton", "title": r["button"], "handle": ("row", i)}]}
-                for i, r in enumerate(getattr(self, "list_rows", []))]
+        """Rows carry an apply button only when the list itself shows one."""
+        out = []
+        for i, r in enumerate(getattr(self, "list_rows", [])):
+            r["index"] = i
+            controls = [] if r.get("detail_only") else [
+                {"role": "AXButton", "title": r["button"], "handle": ("apply", i)}]
+            out.append({"index": i, "text": r["text"], "handle": ("row", i), "controls": controls})
+        return out
+
+    def window_text(self, step):
+        """What the window says, including the detail panel of whichever row is open."""
+        row = getattr(self, "opened_row", None)
+        return f"{row.get('text', '')} · {row.get('detail', '')}" if row else ""
 
     def human_types(self, field: str, value: str) -> None:
         """What a person does when the executor hands a secret step to them."""

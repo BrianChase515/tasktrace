@@ -196,6 +196,53 @@ def test_it_picks_a_job_by_what_the_card_says_not_by_position():
     assert "Top applicant" in entry["chose"]["text"]
 
 
+def test_a_phrase_matches_the_wording_the_site_actually_uses():
+    from tasktrace.replay import _text_matches
+    # LinkedIn never writes "High match" anywhere. It writes this:
+    assert _text_matches("Job match is high, we can help you stand out", ["High match"])
+    assert _text_matches("You'd be a top applicant", ["Top applicant"])
+    assert not _text_matches("Promoted · Easy Apply · Viewed", ["High match", "Top applicant"])
+
+
+# The real failure: on a job board the badge is not on the card. It is in the panel that opens
+# when you click the job, and so is the Easy Apply button.
+BOARD = [
+    {"text": "Service Writer · Acme · Durham, NC", "detail": "Promoted · 50 applicants",
+     "button": "Easy Apply to Service Writer", "detail_only": True},
+    {"text": "CX Strategist · Bitdefender · Remote",
+     "detail": "Job match is high, we can help you stand out · Easy Apply",
+     "button": "Easy Apply to CX Strategist", "detail_only": True},
+    {"text": "Support Lead · Zendesk · Remote", "detail": "You'd be a top applicant",
+     "button": "Easy Apply to Support Lead", "detail_only": True},
+]
+
+
+def test_it_opens_each_job_to_find_the_badge_the_card_does_not_show():
+    drv = FakeDriver()
+    drv.load_list(BOARD)
+    plan = _plan({"action": "pick_list_item", "inspect": True, "param": "job",
+                  "require_any": ["High match", "Top applicant"],
+                  "press": {"title_prefix": "Easy Apply"}})
+    assert validate_plan(plan) == []
+    audit = Executor(plan, drv, ScriptedUI(), mode="watch").run()
+
+    entry = audit["entries"][0]
+    assert entry["outcome"] == "ok"
+    assert drv.clicked_row["button"] == "Easy Apply to CX Strategist"
+    assert [look["matched"] for look in entry["looked_at"]] == [False, True]  # stopped at the first hit
+    assert entry["chose"]["text"].startswith("CX Strategist")
+
+
+def test_inspecting_stops_after_the_jobs_it_was_allowed_to_open():
+    drv = FakeDriver()
+    drv.load_list([BOARD[0]] * 20)
+    handed = []
+    Executor(_plan({"action": "pick_list_item", "inspect": True, "max_inspect": 3,
+                    "require_any": ["Top applicant"], "press": {"title_prefix": "Easy Apply"}}),
+             drv, ScriptedUI(on_handoff=lambda s: handed.append(s["id"])), mode="watch").run()
+    assert handed == [1] and drv.clicked_row is None
+
+
 def test_no_badged_job_hands_over_instead_of_applying_to_anything():
     drv = FakeDriver()
     drv.load_list([JOBS[0]])

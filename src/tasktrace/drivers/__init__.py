@@ -71,6 +71,15 @@ class Driver:
         """Rows of the list on screen: [{"index", "text", "controls": [{"role", "title", "handle"}]}]."""
         return []
 
+    def window_text(self, step: dict) -> str:
+        """Everything the window currently says.
+
+        A list row often doesn't carry the thing you are choosing on: on a job board the card
+        shows the title and the company, while "you'd be a top applicant" is in the panel that
+        appears when you open it. Reading the window is how a step can judge an opened item.
+        """
+        return ""
+
     def snapshot(self) -> dict:
         """{"front_app": str, "windows": [{"id", "title", "app"}]}"""
         return {"front_app": None, "windows": []}

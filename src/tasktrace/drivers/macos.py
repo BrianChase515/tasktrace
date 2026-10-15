@@ -166,10 +166,13 @@ class MacDriver(Driver):
             return None
         app_el = AXUIElementCreateApplication(app.processIdentifier())
         wins = _ax(app_el, "AXWindows") or []
-        want = step.get("window")
-        for w in wins:
-            if want and _ax_str(w, "AXTitle") == want:
-                return w
+        want = (step.get("window") or "").strip()
+        if want:
+            # A browser window is titled "<page> - Google Chrome", so an exact match misses it.
+            for test in (lambda t: t == want, lambda t: t.startswith(want), lambda t: want in t):
+                for w in wins:
+                    if test(_ax_str(w, "AXTitle") or ""):
+                        return w
         return _ax(app_el, "AXFocusedWindow") or (wins[0] if wins else app_el)
 
     def _cg_window(self, step) -> dict | None:
@@ -329,16 +332,29 @@ class MacDriver(Driver):
         if win is None:
             return None
         bounds = self.window_bounds(step)
-        best, queue, seen = None, deque([win]), 0
+        candidates, queue, seen = [], deque([win]), 0
         while queue and seen < MAX_NODES:
             el = queue.popleft()
             seen += 1
             role = _ax_str(el, "AXRole")
             if role in ("AXGroup", "AXScrollArea", "AXSheet") and _dialogish(el, role, bounds):
-                best = el  # keep descending: the innermost panel wins
+                candidates.append(el)
             for child in _ax(el, "AXChildren") or []:
                 queue.append(child)
+        # The panel being filled in is the one holding the fields, not merely the innermost
+        # titled box: a wizard's heading is a titled group too, and it contains nothing.
+        best, best_n = None, 0
+        for el in candidates[:30]:
+            n = sum(1 for c in _descend(el, 300)
+                    if _ax_str(c, "AXRole") in axcontext.INTERACTIVE_ROLES)
+            if n > best_n:
+                best, best_n = el, n
         return best or win
+
+    def window_text(self, step):
+        win = self._window_el(step)
+        node = _snapshot(win, max_nodes=900, depth=14) if win is not None else None
+        return axcontext.text_summary(node or {}, limit=6000, max_nodes=900)
 
     def read_form(self, step):
         root = self._form_root(step)

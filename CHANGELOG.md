@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.1
+
+Three things stopped the first 0.7.0 run dead, all of them mine:
+
+- **The browser was never asked to show its page.** A web page is invisible to accessibility
+  until something switches it on, which happens when a step brings the app to the front — and the
+  new form and list steps never did. So the form read as empty and the run had nothing to work on.
+- **"High match" is not what LinkedIn says.** It says "Job match is high, we can help you stand
+  out". Phrases now also match when every word appears, so a plan can be written in plain words.
+- **The badge isn't on the job card.** It is in the panel that opens when you click the job, along
+  with the Easy Apply button. `pick_list_item` takes `"inspect": true`, which opens each job in
+  turn and judges it on what the window then says, stopping at the first one that reads right.
+
+Also: the panel a form_loop fills is now the one holding the most fields, rather than the
+innermost titled box, which on a wizard is often just the heading.
+
 ## 0.7.0
 
 **A run can now work a form it has never seen.** The first real run showed why a recorded step
