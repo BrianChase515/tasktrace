@@ -111,6 +111,22 @@ jobs:
           sys.exit(0 if usable and all(r.get("current_code_ok") for r in usable) and first_launch_ok else 1)
           PY
 
+      - name: Permission reset check (what setup does to clear switches left by older builds)
+        run: |
+          echo "--- permission reset check ---" | tee -a build.log
+          SYS="/Library/Application Support/com.apple.TCC/TCC.db"
+          BID=io.github.brianchase515.tasktrace
+          count() { sudo sqlite3 "$SYS" "SELECT count(*) FROM access WHERE client='$BID' AND service='$1';"; }
+          FAIL=0
+          for SVC in Accessibility ListenEvent ScreenCapture; do
+            BEFORE=$(count kTCCService$SVC)
+            /usr/bin/tccutil reset "$SVC" "$BID" > /dev/null 2>&1; CODE=$?   # as the normal user, like the app
+            AFTER=$(count kTCCService$SVC)
+            echo "$SVC: entries before=$BEFORE after=$AFTER exit=$CODE" | tee -a build.log
+            [ "$BEFORE" -ge 1 ] && [ "$AFTER" -eq 0 ] && [ "$CODE" -eq 0 ] || FAIL=1
+          done
+          exit $FAIL
+
       - name: Make .dmg
         run: |
           VERSION=$(python -c "import tasktrace; print(tasktrace.__version__)")

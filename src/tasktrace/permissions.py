@@ -16,16 +16,19 @@ PERMISSIONS = {
         "title": "Accessibility",
         "why": "to read which button or field you clicked, and to press it when replaying",
         "pane": "Privacy_Accessibility",
+        "tcc": "Accessibility",
     },
     "input_monitoring": {
         "title": "Input Monitoring",
         "why": "to notice your clicks and keystrokes while recording (password fields are never recorded)",
         "pane": "Privacy_ListenEvent",
+        "tcc": "ListenEvent",
     },
     "screen_recording": {
         "title": "Screen Recording",
         "why": "to take small screenshots around each click and read on-screen text",
         "pane": "Privacy_ScreenCapture",
+        "tcc": "ScreenCapture",
     },
 }
 ORDER = ["accessibility", "input_monitoring", "screen_recording"]
@@ -50,6 +53,29 @@ def status() -> dict:
 def missing() -> list[str]:
     st = status()
     return [k for k in ORDER if st.get(k) is False]
+
+
+def bundle_id() -> str | None:
+    try:
+        from AppKit import NSBundle
+        b = NSBundle.mainBundle().bundleIdentifier()
+        return str(b) if b else None
+    except Exception:
+        return None
+
+
+def clear_stale(name: str) -> bool:
+    """Remove TaskTrace's existing entry for this permission so macOS asks fresh.
+
+    macOS ties each permission switch to one exact app signature. A switch flipped for an older
+    TaskTrace build still shows as ON in System Settings but doesn't count for this build, and
+    restarting can't fix that. Clearing the entry lets the person switch on the current app.
+    Only TaskTrace's own entry is touched."""
+    bid = bundle_id()
+    if not bid or not bid.startswith("io.github.brianchase515.tasktrace"):
+        return False  # not the installed app (e.g. run from a terminal): leave the terminal's entries alone
+    r = subprocess.run(["/usr/bin/tccutil", "reset", PERMISSIONS[name]["tcc"], bid], capture_output=True)
+    return r.returncode == 0
 
 
 def request(name: str) -> None:

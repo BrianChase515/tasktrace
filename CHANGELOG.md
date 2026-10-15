@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4
+
+- **Fixed: permission setup could loop forever.** macOS ties each permission switch to one exact app
+  signature, so switches flipped for an older TaskTrace build still looked ON but didn't count, and
+  restarting couldn't fix it. Setup now clears TaskTrace's own stale entries first, then asks fresh.
+  Builds now share one signature, so this is a one-time step.
+- After a permission restart, TaskTrace says which permissions are still off instead of starting the
+  whole setup again, and Accessibility is checked the moment you click Done.
+
 ## 0.5.3
 
 - **Fixed: pop-ups ignored every click on first launch** (you had to force-quit). The keyboard listener

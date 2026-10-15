@@ -338,35 +338,58 @@ class TaskTraceApp(rumps.App):
         if not miss:
             if not first_launch:
                 alert("You're all set", "TaskTrace has everything it needs.")
+            self._save_state(perm_restart=False)
             return True
         names = "\n".join(f"• {permissions.PERMISSIONS[n]['title']}: {permissions.PERMISSIONS[n]['why']}"
                           for n in miss)
-        i, _ = alert("TaskTrace needs your OK",
-                     f"macOS asks you to approve a few things first:\n\n{names}\n\n"
-                     "For each one, TaskTrace opens the right page in System Settings. Just switch TaskTrace on.",
-                     ("Set up", "Not now"))
+        if self._state().get("perm_restart"):
+            # We just restarted to apply permissions and some are still off. Say so plainly; don't loop.
+            self._save_state(perm_restart=False)
+            i, _ = alert("Some permissions are still off",
+                         f"{names}\n\nIf the switch already looks on in System Settings, it belongs to an "
+                         "older copy of TaskTrace. Set up will clear that and ask again.",
+                         ("Set up", "Not now"))
+        else:
+            i, _ = alert("TaskTrace needs your OK",
+                         f"macOS asks you to approve a few things first:\n\n{names}\n\n"
+                         "For each one, TaskTrace opens the right page in System Settings. Just switch TaskTrace on.",
+                         ("Set up", "Not now"))
         if i != 0:
             return False
+        needs_restart = False
         for name in miss:
             p = permissions.PERMISSIONS[name]
+            permissions.clear_stale(name)  # a switch left over from an older build doesn't count
             permissions.request(name)
             permissions.open_settings(name)
             while True:
                 i, _ = alert(f"Switch on TaskTrace under {p['title']}",
                              f"In the System Settings window that just opened, find TaskTrace in the "
                              f"{p['title']} list and switch it on. macOS may ask for your password.\n\n"
+                             "If it was already on, TaskTrace just turned that old setting off because it "
+                             "belonged to an earlier copy. Switch it on again.\n\n"
                              "Not in the list? Click Show me again.",
                              ("Done", "Show me again", "Skip"))
                 if i == 1:
                     permissions.request(name)
                     permissions.open_settings(name)
                     continue
+                if i == 0 and name == "accessibility" and not permissions.status().get("accessibility"):
+                    j, _ = alert("Accessibility still looks off",
+                                 "macOS doesn't show TaskTrace as switched on yet. Check the switch next to "
+                                 "TaskTrace, then click Done.", ("Check again", "Skip"))
+                    if j == 0:
+                        continue
+                if name != "accessibility":
+                    needs_restart = True  # macOS applies these two only after a restart
                 break
-        i, _ = alert("Restart TaskTrace to finish",
-                     "macOS applies these settings when TaskTrace restarts. It takes a second.",
-                     ("Restart now", "Later"))
-        if i == 0:
-            self._relaunch()
+        if needs_restart:
+            i, _ = alert("Restart TaskTrace to finish",
+                         "macOS applies Input Monitoring and Screen Recording when TaskTrace restarts. "
+                         "It takes a second.", ("Restart now", "Later"))
+            if i == 0:
+                self._save_state(perm_restart=True)
+                self._relaunch()
         self._rebuild()
         return not permissions.missing()
 
