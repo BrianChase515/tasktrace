@@ -1,0 +1,44 @@
+{
+  "name": "q3-report",
+  "goal": "Create the quarterly forecast report in Acme Portal",
+  "started_at": "2026-10-15T14:30:00+00:00",
+  "ended_at": "2026-10-15T14:30:22+00:00",
+  "recorder": "tasktrace 0.1.0",
+  "host": {
+    "os": "macOS 15.6",
+    "machine": "arm64",
+    "screens": [
+      {
+        "frame": [
+          0,
+          0,
+          1440,
+          900
+        ],
+        "scale": 2.0
+      }
+    ]
+  },
+  "initial": {
+    "front_app": {
+      "name": "Safari",
+      "bundle_id": "com.apple.Safari"
+    },
+    "windows": [
+      {
+        "app": "Safari",
+        "title": "Acme Portal - Reports",
+        "window_id": 101,
+        "bounds": [
+          0,
+          25,
+          1440,
+          875
+        ]
+      }
+    ]
+  },
+  "excluded_apps": [
+    "com.1password.1password"
+  ]
+}

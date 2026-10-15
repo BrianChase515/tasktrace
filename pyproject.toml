@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tasktrace"
+version = "0.1.0"
+description = "Record a task on your Mac once. Get one compact trace an AI agent can understand and replicate."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["ai-agents", "computer-use", "mcp", "macos", "accessibility", "demonstration", "rpa"]
+classifiers = [
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "pyobjc-core>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2"]  # works with SDK 1.x (FastMCP) and 2.x (MCPServer)
+images = ["Pillow>=10"]
+dev = ["pytest>=8", "jsonschema>=4", "Pillow>=10"]
+
+[project.scripts]
+tasktrace = "tasktrace.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tasktrace"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

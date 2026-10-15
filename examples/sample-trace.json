@@ -1,0 +1,293 @@
+{
+ "schema": "tasktrace/0.1",
+ "generator": "tasktrace 0.1.0",
+ "task": {
+  "name": "q3-report",
+  "goal": "Create the quarterly forecast report in Acme Portal",
+  "recorded_at": "2026-10-15T14:30:00+00:00",
+  "duration_s": 15.6
+ },
+ "environment": {
+  "os": "macOS 15.6",
+  "machine": "arm64",
+  "screens": [
+   {
+    "frame": [
+     0,
+     0,
+     1440,
+     900
+    ],
+    "scale": 2.0
+   }
+  ],
+  "apps_used": [
+   {
+    "name": "Safari",
+    "bundle_id": "com.apple.Safari"
+   }
+  ]
+ },
+ "replay_guidance": "This is a recorded demonstration of a task on macOS. To replicate it: (1) Read `outline` first, then `steps`. (2) Substitute `parameters` with the values for this run; ask if a value isn't given. Steps marked `secret` were typed into password fields and were never recorded; ask the person. (3) Find each target using the most robust locator available, in order: target.element (accessibility role + title/description, scoped by target.path and the step's window), then target.ocr_label (text visible at the click point), then target.rel_xy (fraction of the window's width/height), and target.abs_xy only if the screen layout matches environment.screens. (4) After each step, confirm its `effect` (windows opened/closed/retitled) before continuing; if the effect doesn't happen, stop and re-check rather than guessing. (5) `intent` is the person's own explanation of why a step happens; it outranks your inference. (6) The task is complete when `success_criteria` holds. Steps marked `optional` did not occur in every run.",
+ "parameters": [
+  {
+   "name": "report_title",
+   "kind": "text",
+   "example": "Q3 forecast",
+   "step": 3,
+   "status": "guess"
+  },
+  {
+   "name": "period_end",
+   "kind": "date",
+   "example": "2026-09-30",
+   "step": 5,
+   "status": "guess"
+  },
+  {
+   "name": "approval_pin",
+   "kind": "secret",
+   "step": 7,
+   "status": "guess"
+  }
+ ],
+ "outline": [
+  "1. Click button \"New Report\" in Safari > Acme Portal - Reports -> opens \"Report Wizard\"",
+  "2. Click text field \"Report title\" in Safari > Report Wizard",
+  "3. Type {report_title} (e.g. \"Q3 forecast\") into text field \"Report title\" in Safari > Report Wizard",
+  "4. Press tab",
+  "5. Type {period_end} (e.g. \"2026-09-30\") into text field \"Period end\" in Safari > Report Wizard",
+  "6. Click password field \"Approval PIN\" in Safari > Report Wizard",
+  "7. Type [secret] into password field \"Approval PIN\" in Safari > Report Wizard",
+  "8. Click button \"Create\" in Safari > Report Wizard -> closes \"Report Wizard\" -> window becomes \"Acme Portal - Q3 forecast\"",
+  "9. Press cmd+s in Safari > Acme Portal - Q3 forecast"
+ ],
+ "steps": [
+  {
+   "id": 1,
+   "t_ms": 2000,
+   "action": "click",
+   "describe": "Click button \"New Report\" in Safari > Acme Portal - Reports -> opens \"Report Wizard\"",
+   "app": "Safari",
+   "window": "Acme Portal - Reports",
+   "target": {
+    "element": {
+     "role": "AXButton",
+     "title": "New Report"
+    },
+    "path": "AXWindow 'Acme Portal - Reports' > AXWebArea > AXGroup 'toolbar' > AXButton 'New Report'",
+    "rel_xy": [
+     0.896,
+     0.134
+    ],
+    "in_element_xy": [
+     50,
+     14
+    ],
+    "abs_xy": [
+     1290,
+     142
+    ],
+    "crop": "crops/0001.png"
+   },
+   "intent": "Starting from the Reports page; New Report is top right",
+   "effect": {
+    "opened": [
+     "Report Wizard"
+    ],
+    "screenshot": "keyframes/0001.png",
+    "settle_ms": 580
+   }
+  },
+  {
+   "id": 2,
+   "t_ms": 4100,
+   "action": "click",
+   "describe": "Click text field \"Report title\" in Safari > Report Wizard",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "title": "Report title",
+     "placeholder": "e.g. Q1 forecast"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'details' > AXTextField 'Report title'",
+    "rel_xy": [
+     0.5,
+     0.238
+    ],
+    "in_element_xy": [
+     160,
+     12
+    ],
+    "abs_xy": [
+     720,
+     300
+    ],
+    "crop": "crops/0002.png"
+   }
+  },
+  {
+   "id": 3,
+   "t_ms": 4500,
+   "action": "type",
+   "describe": "Type {report_title} (e.g. \"Q3 forecast\") into text field \"Report title\" in Safari > Report Wizard",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "title": "Report title",
+     "placeholder": "e.g. Q1 forecast"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'details' > AXTextField 'Report title'"
+   },
+   "text": "Q3 forecast",
+   "param": "report_title"
+  },
+  {
+   "id": 4,
+   "t_ms": 6790,
+   "action": "key",
+   "describe": "Press tab",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "title": "Report title",
+     "placeholder": "e.g. Q1 forecast"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'details' > AXTextField 'Report title'"
+   },
+   "keys": "tab"
+  },
+  {
+   "id": 5,
+   "t_ms": 7290,
+   "action": "type",
+   "describe": "Type {period_end} (e.g. \"2026-09-30\") into text field \"Period end\" in Safari > Report Wizard",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "title": "Period end",
+     "placeholder": "YYYY-MM-DD"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'details' > AXTextField 'Period end'"
+   },
+   "text": "2026-09-30",
+   "intent": "Always use the last day of the quarter",
+   "param": "period_end"
+  },
+  {
+   "id": 6,
+   "t_ms": 9190,
+   "action": "click",
+   "describe": "Click password field \"Approval PIN\" in Safari > Report Wizard",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "subrole": "AXSecureTextField",
+     "title": "Approval PIN"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'approval' > AXTextField 'Approval PIN'",
+    "rel_xy": [
+     0.367,
+     0.529
+    ],
+    "in_element_xy": [
+     80,
+     12
+    ],
+    "abs_xy": [
+     640,
+     422
+    ]
+   }
+  },
+  {
+   "id": 7,
+   "t_ms": 9690,
+   "action": "type",
+   "describe": "Type [secret] into password field \"Approval PIN\" in Safari > Report Wizard",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXTextField",
+     "subrole": "AXSecureTextField",
+     "title": "Approval PIN"
+    },
+    "path": "AXWindow 'Report Wizard' > AXGroup 'approval' > AXTextField 'Approval PIN'"
+   },
+   "secret": true,
+   "param": "approval_pin"
+  },
+  {
+   "id": 8,
+   "t_ms": 11030,
+   "action": "click",
+   "describe": "Click button \"Create\" in Safari > Report Wizard -> closes \"Report Wizard\" -> window becomes \"Acme Portal - Q3 forecast\"",
+   "app": "Safari",
+   "window": "Report Wizard",
+   "target": {
+    "element": {
+     "role": "AXButton",
+     "title": "Create"
+    },
+    "path": "AXWindow 'Report Wizard' > AXButton 'Create'",
+    "rel_xy": [
+     0.867,
+     0.905
+    ],
+    "in_element_xy": [
+     40,
+     14
+    ],
+    "abs_xy": [
+     940,
+     580
+    ],
+    "crop": "crops/0004.png"
+   },
+   "effect": {
+    "closed": [
+     "Report Wizard"
+    ],
+    "retitled": [
+     {
+      "from": "Acme Portal - Reports",
+      "to": "Acme Portal - Q3 forecast"
+     }
+    ],
+    "focused": "Acme Portal - Q3 forecast",
+    "settle_ms": 530
+   }
+  },
+  {
+   "id": 9,
+   "t_ms": 13530,
+   "action": "hotkey",
+   "describe": "Press cmd+s in Safari > Acme Portal - Q3 forecast",
+   "app": "Safari",
+   "window": "Acme Portal - Q3 forecast",
+   "keys": "cmd+s"
+  }
+ ],
+ "success_criteria": {
+  "final_app": "Safari",
+  "final_window": "Acme Portal - Q3 forecast",
+  "done_marker": {
+   "t_ms": 15030,
+   "screenshot": "keyframes/done.png"
+  }
+ },
+ "redactions": {
+  "total": 0
+ }
+}

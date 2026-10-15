@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tasktrace/tasktrace/schema/trace.schema.json",
+  "title": "tasktrace trace",
+  "description": "One recorded task demonstration, compiled for an AI agent to understand and replicate.",
+  "type": "object",
+  "required": ["schema", "task", "replay_guidance", "parameters", "outline", "steps", "success_criteria"],
+  "properties": {
+    "schema": { "const": "tasktrace/0.1" },
+    "generator": { "type": "string" },
+    "task": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "goal": { "type": "string", "description": "What the person said the task is for." },
+        "recorded_at": { "type": "string" },
+        "duration_s": { "type": "number" },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "gaps": {
+          "type": "array",
+          "description": "Periods not recorded (paused, or an excluded app such as a password manager was in front).",
+          "items": { "type": "object" }
+        },
+        "runs_compared": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "os": { "type": "string" },
+        "machine": { "type": "string" },
+        "screens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "frame": { "$ref": "#/$defs/rect" },
+              "scale": { "type": "number" }
+            }
+          }
+        },
+        "apps_used": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "name": { "type": "string" }, "bundle_id": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "replay_guidance": { "type": "string" },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "step", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "enum": ["text", "date", "number", "currency", "email", "url", "secret"] },
+          "example": { "type": "string" },
+          "step": { "type": "integer" },
+          "status": {
+            "enum": ["guess", "confirmed"],
+            "description": "guess = inferred from one run; confirmed = value differed between compared runs."
+          },
+          "seen": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "outline": {
+      "type": "array",
+      "description": "One line per step. The cheapest way to read the task.",
+      "items": { "type": "string" }
+    },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "success_criteria": {
+      "type": "object",
+      "properties": {
+        "final_app": { "type": "string" },
+        "final_window": { "type": "string" },
+        "last_effect": { "$ref": "#/$defs/effect" },
+        "done_marker": { "type": "object" },
+        "visible_text": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "redactions": {
+      "type": "object",
+      "properties": {
+        "total": { "type": "integer" },
+        "by_kind": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    }
+  },
+  "$defs": {
+    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+    "xy": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+    "step": {
+      "type": "object",
+      "required": ["id", "t_ms", "action", "describe"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "t_ms": { "type": "integer", "minimum": 0 },
+        "action": {
+          "enum": ["click", "double_click", "triple_click", "right_click", "drag", "type", "key", "hotkey", "scroll"]
+        },
+        "describe": { "type": "string" },
+        "app": { "type": "string" },
+        "window": { "type": "string" },
+        "intent": { "type": "string", "description": "The person's own note about why this step happens." },
+        "text": { "type": "string" },
+        "secret": { "type": "boolean" },
+        "param": { "type": "string" },
+        "constant": { "type": "boolean" },
+        "optional": { "type": "boolean" },
+        "keys": { "type": "string" },
+        "times": { "type": "integer" },
+        "scroll": { "type": "object", "properties": { "dx": { "type": "number" }, "dy": { "type": "number" } } },
+        "target": {
+          "type": "object",
+          "description": "Locators, most robust first: element, ocr_label, rel_xy, abs_xy.",
+          "properties": {
+            "element": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string" },
+                "subrole": { "type": "string" },
+                "title": { "type": "string" },
+                "description": { "type": "string" },
+                "placeholder": { "type": "string" },
+                "identifier": { "type": "string" },
+                "value": { "type": "string" },
+                "help": { "type": "string" }
+              }
+            },
+            "path": { "type": "string" },
+            "ocr_label": { "type": "string" },
+            "rel_xy": { "$ref": "#/$defs/xy" },
+            "in_element_xy": { "$ref": "#/$defs/xy" },
+            "abs_xy": { "$ref": "#/$defs/xy" },
+            "to_xy": { "$ref": "#/$defs/xy" },
+            "crop": { "type": "string" },
+            "thumbnail": { "type": "string" }
+          }
+        },
+        "effect": { "$ref": "#/$defs/effect" }
+      }
+    },
+    "effect": {
+      "type": "object",
+      "description": "What changed on screen as a result of the step.",
+      "properties": {
+        "opened": { "type": "array", "items": { "type": "string" } },
+        "closed": { "type": "array", "items": { "type": "string" } },
+        "retitled": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "from": { "type": "string" }, "to": { "type": "string" } } }
+        },
+        "focused": { "type": "string" },
+        "app": { "type": "string" },
+        "settle_ms": { "type": "integer" },
+        "screenshot": { "type": "string" }
+      }
+    }
+  }
+}
