@@ -115,9 +115,10 @@ def reveal(path: Path) -> None:
 class DialogUI:
     """The executor's questions, as dialogs. Called from the replay thread."""
 
-    def ask_value(self, name: str) -> str:
-        _, v = on_main(alert, f"What should “{name}” be this time?",
-                       "This value can change from run to run.", ("Use this value",), field="")
+    def ask_value(self, name: str, question: str | None = None, options: list | None = None) -> str:
+        title = question or f"What should “{name}” be this time?"
+        text = ("Options: " + ", ".join(options)) if options else "This value can change from run to run."
+        _, v = on_main(alert, title, text, ("Use this answer",), field="")
         return (v or "").strip()
 
     def confirm(self, step, desc, match):

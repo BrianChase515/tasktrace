@@ -53,6 +53,9 @@ class Driver:
     def screenshot(self, path: Path) -> bool:
         return False
 
+    def close(self) -> None:
+        """Undo anything the driver changed while running (e.g. accessibility settings)."""
+
 
 def get_driver(name: str = "auto") -> Driver:
     import sys

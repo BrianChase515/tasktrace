@@ -36,17 +36,32 @@ def ocr_image(path: Path) -> list[dict]:
     return out
 
 
-def label_near_center(path: Path, min_conf: float = 0.3) -> str | None:
-    """The text closest to the middle of a click crop, which is where the click landed."""
-    best, best_d = None, 9.0
-    for o in ocr_image(path):
-        if o["conf"] < min_conf or not o["text"].strip():
+def pick_label(items: list[dict], min_conf: float = 0.3) -> str | None:
+    """Choose the text a click was aimed at from OCR results of the crop around it.
+
+    Prefers text under the click point, then text nearest to it. Text running off the edge of
+    the crop is probably cut off ("Submit applicatior"), so it only wins when nothing else is close.
+    """
+    best, best_score = None, 99.0
+    for o in items:
+        text = o["text"].strip()
+        if o["conf"] < min_conf or not text:
             continue
         x, y, w, h = o["box"]
-        d = (x + w / 2 - 0.5) ** 2 + (y + h / 2 - 0.5) ** 2
-        if d < best_d:
-            best, best_d = o["text"].strip(), d
+        cx, cy = x + w / 2, y + h / 2
+        score = (cx - 0.5) ** 2 + 4 * (cy - 0.5) ** 2  # vertical distance matters more: lines are wide
+        if x <= 0.5 <= x + w and y <= 0.5 <= y + h:
+            score -= 1.0  # the click landed on this text
+        if x < 0.01 or x + w > 0.99:
+            score += 0.5  # clipped by the crop edge
+        if score < best_score:
+            best, best_score = text, score
     return best[:80] if best else None
+
+
+def label_near_center(path: Path, min_conf: float = 0.3) -> str | None:
+    """The text a click crop was centered on."""
+    return pick_label(ocr_image(path), min_conf)
 
 
 def read_lines(path: Path, limit: int = 40) -> list[str]:

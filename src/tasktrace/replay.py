@@ -73,7 +73,9 @@ class TerminalUI:
                 return choices[key]
             self.out("     (answer with one of the letters shown)")
 
-    def ask_value(self, name: str) -> str:
+    def ask_value(self, name: str, question: str | None = None, options: list | None = None) -> str:
+        if question:
+            self.out(f"\n? {question}" + (f"  ({' / '.join(options)})" if options else ""))
         return self.inp(f"Value for {{{name}}}: ").strip()
 
     def confirm(self, step: dict, desc: str, match: Match | None) -> str:
@@ -114,7 +116,7 @@ class ScriptedUI:
     def _a(self, step, key, default):
         return (self.answers.get(step["id"]) or {}).get(key, default)
 
-    def ask_value(self, name):
+    def ask_value(self, name, question=None, options=None):
         self.asked.append(name)
         return self.values.get(name, "")
 
@@ -214,6 +216,16 @@ class Executor:
                 return finish("stopped", False)
             return finish("skipped" if ans == "skip" else "handed_to_human", True)
 
+        if step["action"] == "ask":
+            if self.mode == "dry-run":
+                return finish("would_ask", True)
+            answer = self.ui.ask_value(step["param"], step.get("question"), step.get("options"))
+            values[step["param"]] = answer
+            entry["question"] = step.get("question")
+            if not step.get("secret"):
+                entry["answer"] = answer
+            return finish("answered" if answer else "unanswered", True)
+
         if step.get("secret"):
             return hand_to_human("secret: you type it, it is never recorded")
 
@@ -298,8 +310,10 @@ class Executor:
     def run(self) -> dict:
         started = _now()
         values = dict(self.plan.get("values") or {})
+        asked_later = {s.get("param") for s in self.plan.get("steps", []) if s.get("action") == "ask"}
         for name in missing_values(self.plan):
-            values[name] = self.ui.ask_value(name)
+            if name not in asked_later:
+                values[name] = self.ui.ask_value(name, f"What should “{name}” be for this run?")
         start_state = self.driver.snapshot()
 
         entries, keep = [], True
@@ -311,6 +325,10 @@ class Executor:
             entry, keep = self._run_step(step, values)
             entries.append(entry)
 
+        try:
+            self.driver.close()
+        except Exception:
+            pass
         end_state = self.driver.snapshot()
         counts: dict[str, int] = {}
         for e in entries:

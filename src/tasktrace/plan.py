@@ -20,6 +20,7 @@ from .compile import element_label
 PLAN_SCHEMA = "tasktrace-plan/0.1"
 CLICKS = {"click", "double_click", "triple_click", "right_click", "drag"}
 TARGETED = CLICKS | {"type", "scroll"}
+ACTIONS = TARGETED | {"key", "hotkey", "open_app", "ask"}
 
 # Buttons whose label suggests the step changes something that's hard to undo.
 CONSEQUENTIAL = re.compile(
@@ -140,8 +141,12 @@ def validate_plan(plan: dict) -> list[str]:
         errs.append("step ids must be 1..n in order")
     for s in plan.get("steps", []):
         a = s.get("action")
-        if a not in TARGETED | {"key", "hotkey"}:
+        if a not in ACTIONS:
             errs.append(f"step {s.get('id')}: unknown action {a!r}")
+        if a == "open_app" and not s.get("app"):
+            errs.append(f"step {s.get('id')}: open_app needs app")
+        if a == "ask" and not (s.get("question") and s.get("param")):
+            errs.append(f"step {s.get('id')}: ask needs a question and a param to store the answer in")
         if a in CLICKS and not (s.get("target") or {}):
             errs.append(f"step {s.get('id')}: {a} needs a target")
         if a in ("key", "hotkey") and not s.get("keys"):

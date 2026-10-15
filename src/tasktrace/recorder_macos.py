@@ -38,8 +38,10 @@ from ApplicationServices import (
     AXIsProcessTrusted,
     AXUIElementCopyAttributeValue,
     AXUIElementCopyElementAtPosition,
+    AXUIElementCreateApplication,
     AXUIElementCreateSystemWide,
     AXUIElementGetPid,
+    AXUIElementSetAttributeValue,
     AXUIElementSetMessagingTimeout,
     AXValueGetValue,
 )
@@ -78,7 +80,27 @@ IGNORED_WINDOW_OWNERS = {
 HOTKEY_MODS = Quartz.kCGEventFlagMaskControl | Quartz.kCGEventFlagMaskAlternate
 KC_N, KC_D, KC_P, KC_Q = 45, 2, 35, 12  # ANSI key codes
 FOCUS_RESET_KEYS = {36, 48, 53, 76}  # return, tab, escape, enter
-CROP_W, CROP_H = 200, 80
+CROP_W, CROP_H = 360, 110  # wide enough to read a whole button or field label
+
+# System prompts that pop up while you work but aren't part of the task.
+NOISE_BUNDLES = {"com.apple.UserNotificationCenter", "com.apple.notificationcenterui"}
+DOCK_BUNDLE = "com.apple.dock"
+
+# Chromium browsers and Electron apps keep their page/app contents hidden from accessibility
+# tools until asked. Without this, every click in a web page reads as an unnamed "scroll area".
+CHROMIUM_BUNDLES = {
+    "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+    "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
+}
+
+# Roles a person actually means to click. A click on a button's text label resolves to the button.
+ACTIONABLE_ROLES = {
+    "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXTextField",
+    "AXTextArea", "AXSearchField", "AXComboBox", "AXMenuItem", "AXMenuBarItem", "AXTab", "AXCell", "AXRow",
+    "AXSlider", "AXDisclosureTriangle", "AXDockItem", "AXIncrementor", "AXColorWell", "AXSwitch", "AXToggle",
+}
+PASS_THROUGH_ROLES = {"AXStaticText", "AXImage", "AXGroup", "AXUnknown", "AXHeading", "AXGenericElement"}
 POLL_S = 0.2
 
 MOUSE_DOWN = {Quartz.kCGEventLeftMouseDown: "left", Quartz.kCGEventRightMouseDown: "right",
@@ -157,6 +179,54 @@ def _ax_path(el, depth: int = 6) -> str:
     return " > ".join(reversed(parts))
 
 
+def enable_app_accessibility(pid: int, bundle_id: str) -> list[str]:
+    """Ask an app to expose its full accessibility tree (web pages in Chromium, Electron app contents).
+
+    Returns the attributes that were switched on, so they can be switched back off later.
+    """
+    app_el = AXUIElementCreateApplication(pid)
+    turned_on = []
+    attrs = ["AXManualAccessibility"]  # Electron and Chromium; no side effects
+    if bundle_id in CHROMIUM_BUNDLES:
+        attrs.append("AXEnhancedUserInterface")  # what VoiceOver sets; Chrome keys off it
+    for attr in attrs:
+        try:
+            if AXUIElementSetAttributeValue(app_el, attr, True) == 0:
+                turned_on.append(attr)
+        except Exception:
+            pass
+    return turned_on
+
+
+def restore_app_accessibility(pid: int, attrs: list[str]) -> None:
+    # Leaving AXEnhancedUserInterface on can slow window animations, so put it back.
+    if "AXEnhancedUserInterface" in attrs:
+        try:
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXEnhancedUserInterface", False)
+        except Exception:
+            pass
+
+
+def _actionable(el, depth: int = 5):
+    """Walk up from what's under the pointer to the thing the person meant to click.
+
+    Returns (target, text) where text is the label read from a child (e.g. a link's inner text)."""
+    cur, text = el, None
+    for _ in range(depth):
+        role = _ax_str(cur, "AXRole")
+        if role in ACTIONABLE_ROLES:
+            return cur, text
+        if role not in PASS_THROUGH_ROLES:
+            break
+        if text is None:
+            text = _ax_str(cur, "AXValue", 80) or _ax_str(cur, "AXTitle", 80) or _ax_str(cur, "AXDescription", 80)
+        parent = _ax(cur, "AXParent")
+        if parent is None:
+            break
+        cur = parent
+    return el, None
+
+
 def _element_info(el) -> tuple[dict, bool]:
     info: dict = {}
     for key, attr in (("role", "AXRole"), ("subrole", "AXSubrole"), ("title", "AXTitle"),
@@ -176,6 +246,14 @@ def _element_info(el) -> tuple[dict, bool]:
         v = _ax_str(el, "AXValue", 80)
         if v:
             info["value"] = v
+    if "title" not in info and "description" not in info and info.get("role") in ("AXButton", "AXLink",
+                                                                               "AXMenuItem", "AXTab", "AXCell"):
+        # Web buttons and links often carry their label in a child text element.
+        for child in (_ax(el, "AXChildren") or [])[:6]:
+            v = _ax_str(child, "AXValue", 80) or _ax_str(child, "AXTitle", 80)
+            if v:
+                info["title"] = v
+                break
     frame = _ax_frame(el)
     if frame:
         info["frame"] = frame
@@ -263,6 +341,7 @@ class Recorder:
         self.crop_n = self.key_n = self.done_n = 0
         self.tap = None
         self._own_pid = os.getpid()
+        self._ax_enabled: dict = {}  # pid -> accessibility attributes we switched on
         self._ignored_buttons: set = set()
 
     # ---- plumbing
@@ -320,23 +399,47 @@ class Recorder:
             "window": {"title": w["title"], "id": w["id"], "bounds": w["bounds"]},
         }
 
+    def _app_info(self, pid: int) -> dict:
+        app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        return {"name": str(app.localizedName() or "") if app else "", "bundle_id": self._bundle(pid), "pid": pid}
+
     def _mouse_ctx(self, x: int, y: int) -> tuple[dict | None, bool]:
-        """Context for a click, or (None, False) if the click landed on TaskTrace itself."""
-        ctx = self._ctx_for_window(self._window_at(x, y))
+        """Context for a click, or (None, False) for clicks that aren't part of the task
+        (TaskTrace's own menu and dialogs, system notification prompts)."""
+        win = self._window_at(x, y)
+        ctx = self._ctx_for_window(win)
         secure = False
         try:
             err, el = AXUIElementCopyElementAtPosition(self.system, float(x), float(y), None)
             if err == 0 and el is not None:
+                pid = None
                 try:
                     perr, pid = AXUIElementGetPid(el, None)
-                    if perr == 0 and pid == self._own_pid:
-                        return None, False
+                    pid = pid if perr == 0 else None
                 except Exception:
                     pass
-                ctx["element"], secure = _element_info(el)
+                if pid == self._own_pid:
+                    return None, False
+                if pid is not None:
+                    owner = self._bundle(pid)
+                    if owner in NOISE_BUNDLES:
+                        return None, False
+                    if not win or win["pid"] != pid:
+                        # The Dock, the menu bar, a popover: the window underneath isn't what was clicked.
+                        ctx = {"app": self._app_info(pid)}
+                    self._ensure_ax(pid, owner)
+                target, child_text = _actionable(el)
+                ctx["element"], secure = _element_info(target)
+                if child_text and not (ctx["element"].get("title") or ctx["element"].get("description")):
+                    ctx["element"]["title"] = child_text
         except Exception:
             pass
         return ctx, secure
+
+    def _ensure_ax(self, pid: int, bundle_id: str) -> None:
+        if pid in self._ax_enabled or pid == self._own_pid or bundle_id in (DOCK_BUNDLE, ""):
+            return
+        self._ax_enabled[pid] = enable_app_accessibility(pid, bundle_id)
 
     def _focus_ctx(self) -> tuple[dict, bool]:
         now = time.monotonic()
@@ -483,6 +586,8 @@ class Recorder:
                 continue
             with self._win_lock:
                 self.windows, self.front = wins, front
+            for w in wins:  # new apps get asked to expose their contents as soon as they appear
+                self._ensure_ax(w["pid"], self._bundle(w["pid"]))
             excluded = front.get("bundle_id") in self.excluded
             if excluded != self.in_excluded:
                 self.in_excluded = excluded
@@ -551,6 +656,8 @@ class Recorder:
         self._started = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         self.front = self._front_app()
         self.windows = self._visible_windows()
+        for w in self.windows:
+            self._ensure_ax(w["pid"], self._bundle(w["pid"]))
         self._initial = {"front_app": {k: v for k, v in self.front.items() if k != "pid"},
                          "windows": [self._wpub(w) for w in self.windows[:15]]}
         mask = 0
@@ -581,6 +688,8 @@ class Recorder:
             pass
         for th in self._threads:
             th.join(timeout=15)
+        for pid, attrs in self._ax_enabled.items():
+            restore_app_accessibility(pid, attrs)
         self._out.close()
         meta = {
             "name": self.name,

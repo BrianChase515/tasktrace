@@ -321,6 +321,8 @@ def describe(step: dict) -> str:
     else:
         thing = role
 
+    if a == "open_app":
+        return f"Open {step.get('app')}"
     if a in VERBS:
         text = f"{VERBS[a]} {thing}"
     elif a == "drag":
@@ -329,6 +331,8 @@ def describe(step: dict) -> str:
         if step.get("secret"):
             text = f"Type [secret] into {thing}"
         elif step.get("param"):
+            if thing == "element" and tgt.get("field_hint"):
+                thing = f'the field for "{tgt["field_hint"]}"'
             text = f'Type {{{step["param"]}}} (e.g. "{step.get("text", "")}") into {thing}'
         else:
             text = f'Type "{step.get("text", "")}" into {thing}'
@@ -402,16 +406,35 @@ def _out_step(i: int, s: dict, run_dir: Path, use_ocr: bool, embed: bool) -> dic
         out["intent"] = " / ".join(s["intent"])
     if s.get("effect"):
         out["effect"] = s["effect"]
+    if s["action"] == "click" and el.get("role") == "AXDockItem" and el.get("title"):
+        # Clicking an app in the Dock means "open this app"; positions in the Dock are meaningless.
+        out.update(action="open_app", app=el["title"], window=None,
+                   target={"element": {"role": "AXDockItem", "title": el["title"]}})
     return out
 
 
+QUESTION_GAP_MS = 8000
+
+
 def _assign_parameters(steps: list[dict]) -> list[dict]:
+    """Name each typed value after its field, or after the question clicked just before typing."""
     params, used = [], set()
+    last_click: dict | None = None
     for st in steps:
+        if st["action"] in VERBS:
+            last_click = st
+            continue
         if st["action"] != "type":
             continue
         tgt = st.get("target") or {}
-        label = element_label(tgt.get("element") or {}, tgt.get("ocr_label")) or f"text_{st['id']}"
+        label = element_label(tgt.get("element") or {}, tgt.get("ocr_label"))
+        if not label and last_click and last_click.get("window") == st.get("window") \
+                and st["t_ms"] - last_click["t_ms"] <= QUESTION_GAP_MS:
+            ltgt = last_click.get("target") or {}
+            label = element_label(ltgt.get("element") or {}, ltgt.get("ocr_label"))
+            if label:
+                st.setdefault("target", {})["field_hint"] = label
+        label = label or f"text_{st['id']}"
         name = base = _slug(label)
         n = 2
         while name in used:

@@ -23,7 +23,14 @@ from ApplicationServices import (
 
 from .. import ocr
 from ..compile import SPECIAL_KEYS
-from ..recorder_macos import _ax, _ax_frame, _ax_str, _window_list
+from ..recorder_macos import (
+    _ax,
+    _ax_frame,
+    _ax_str,
+    _window_list,
+    enable_app_accessibility,
+    restore_app_accessibility,
+)
 from . import Driver, Match
 
 ANSI = {
@@ -46,6 +53,21 @@ def _post(ev) -> None:
 class MacDriver(Driver):
     name = "macos"
 
+    def __init__(self):
+        self._ax_enabled: dict = {}  # pid -> attributes switched on, restored in close()
+
+    def _expose(self, app) -> None:
+        """Ask the app to expose its full accessibility tree (needed for Chrome pages and Electron apps)."""
+        pid = int(app.processIdentifier())
+        if pid not in self._ax_enabled:
+            self._ax_enabled[pid] = enable_app_accessibility(pid, str(app.bundleIdentifier() or ""))
+            if self._ax_enabled[pid]:
+                time.sleep(0.6)  # the app builds its tree asynchronously
+
+    def close(self):
+        for pid, attrs in self._ax_enabled.items():
+            restore_app_accessibility(pid, attrs)
+
     # ---- apps and windows
     def _app(self, step: dict):
         name = step.get("app")
@@ -56,8 +78,13 @@ class MacDriver(Driver):
         return NSWorkspace.sharedWorkspace().frontmostApplication()
 
     def prepare(self, step):
+        if step.get("action") == "open_app":
+            return
         app = self._app(step)
-        if app is not None and not app.isActive():
+        if app is None:
+            return
+        self._expose(app)
+        if not app.isActive():
             app.activateWithOptions_(1 << 1)  # NSApplicationActivateIgnoringOtherApps
             time.sleep(0.4)
 
@@ -187,6 +214,13 @@ class MacDriver(Driver):
 
     def act(self, step, match, text=None):
         a = step["action"]
+        if a == "open_app":
+            subprocess.run(["open", "-a", step["app"]], capture_output=True, timeout=30, check=True)
+            time.sleep(1.5)
+            app = self._app(step)
+            if app is not None:
+                self._expose(app)
+            return
         if a == "click" and match and match.strategy == "element" and match.handle is not None:
             if AXUIElementPerformAction(match.handle, "AXPress") == 0:
                 return

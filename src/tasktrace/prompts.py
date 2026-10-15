@@ -16,7 +16,10 @@ Plan rules:
 - Output ONLY one JSON object, schema "{PLAN_SCHEMA}". No prose, no code fences.
 - "author": {{"kind": "ai", "name": "<your product name>", "model": "<model if known>"}}.
 - Steps use the same actions as the trace: click, double_click, triple_click, right_click, drag,
-  type, key, hotkey, scroll. Number steps 1..n.
+  type, key, hotkey, scroll, open_app ({{"action": "open_app", "app": "<name>"}}). Number steps 1..n.
+- When you are not sure what the person wants, DON'T guess: add an ask step before it,
+  {{"action": "ask", "question": "<plain question>", "param": "<name>", "options": ["optional", "choices"]}},
+  and use "{{name}}" in later steps. The run pauses and the person answers.
 - Keep each step's "target" locators from the trace (element, path, ocr_label, rel_xy, abs_xy).
   The executor tries them in that order. Never invent coordinates.
 - Typed values: write "{{param_name}}" in "text" and put the value in "values".

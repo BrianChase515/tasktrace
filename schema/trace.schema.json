@@ -102,7 +102,7 @@
         "id": { "type": "integer", "minimum": 1 },
         "t_ms": { "type": "integer", "minimum": 0 },
         "action": {
-          "enum": ["click", "double_click", "triple_click", "right_click", "drag", "type", "key", "hotkey", "scroll"]
+          "enum": ["click", "double_click", "triple_click", "right_click", "drag", "type", "key", "hotkey", "scroll", "open_app"]
         },
         "describe": { "type": "string" },
         "app": { "type": "string" },
@@ -135,6 +135,7 @@
             },
             "path": { "type": "string" },
             "ocr_label": { "type": "string" },
+            "field_hint": { "type": "string", "description": "For typing into an unlabeled field: the question clicked just before." },
             "rel_xy": { "$ref": "#/$defs/xy" },
             "in_element_xy": { "$ref": "#/$defs/xy" },
             "abs_xy": { "$ref": "#/$defs/xy" },

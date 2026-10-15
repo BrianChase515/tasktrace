@@ -84,6 +84,9 @@ class FakeDriver(Driver):
 
     def act(self, step, match, text=None):
         a = step["action"]
+        if a == "open_app":
+            self.log.append(f"open {step.get('app')}")
+            return
         if a in ("click", "double_click", "triple_click", "right_click"):
             e = match.handle if (match and match.handle) else self._at(match.x, match.y)
             self.log.append(f"{a} {e['title'] if e else (match.x, match.y)}")

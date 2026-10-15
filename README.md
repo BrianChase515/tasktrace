@@ -71,10 +71,14 @@ These tools are complementary. tasktrace's bet is that the **file format** is th
 - **Ranked locators.** Every click records the accessibility element (role, title, ancestry path), the text
   visible at the click point (on-device OCR), the position relative to the window, and absolute
   coordinates — in that order of robustness. `replay_guidance` tells the agent to use them in that order.
+  A click on a button's label resolves to the button itself, and clicks in the Dock become "Open <app>" steps.
+- **Works inside Chrome and Electron apps.** Chromium browsers and Electron apps (Slack, VS Code, Notion…)
+  hide their contents from accessibility tools unless asked. TaskTrace asks while it records or replays, so
+  web buttons and form fields come through by name, then switches the setting back when it's done.
 - **Cause and effect.** Window opens, closes, retitles and app switches are attributed to the step that
   caused them, so the agent can verify each step before moving on instead of clicking blind.
 - **Parameters, not just values.** Text you type becomes a named parameter (`{report_title}`), typed as
-  text/date/number/currency/email. Record the task twice and `tasktrace diff` confirms which values really
+  text/date/number/currency/email. A field with no label is named after the question you clicked just before. Record the task twice and `tasktrace diff` confirms which values really
   vary and which are constants, and marks steps that only happen sometimes as `optional`.
 - **Intent.** Press `ctrl+opt+N` mid-task to add a note ("always use the last day of the quarter"). It
   attaches to the next step. Decision points are exactly what screen data can't show.
@@ -216,6 +220,15 @@ never means "go". Raw screen coordinates are off unless you pass `--allow-abs`. 
 that every target can be found without touching anything. If an expected window doesn't appear, the run
 stops instead of guessing.
 
+**Asking instead of guessing.** A plan can include an `ask` step where the author wasn't sure:
+
+```json
+{"id": 4, "action": "ask", "question": "Which report title should I use?", "param": "title", "options": ["Q3", "Q4"]}
+```
+
+The run pauses there and asks you (a pop-up in the app, a prompt in the terminal). Later steps use your
+answer as `{title}`, and the audit records the question and answer.
+
 ## How it works
 
 ```
@@ -242,7 +255,9 @@ macOS driver depend on what each app exposes through accessibility.
 On a work machine, check your IT policy before running anything that records input or controls the
 mouse and keyboard. Step mode's per-step approval makes that conversation easier.
 
-- **Electron and some web apps** expose thin accessibility trees; OCR and relative position carry more weight there.
+- **Some web pages and custom-drawn apps** still expose little to accessibility tools; OCR and relative
+  position carry more weight there. Firefox isn't switched on automatically yet.
+- **System prompts** (like macOS asking to allow notifications) are left out of recordings on purpose.
 - **Click crops are taken just after the click** (via `screencapture`), so a button that closes its window may
   not appear in its crop. The accessibility element still identifies it.
 - **Window changes are polled** at 5 Hz, so `settle_ms` is approximate.
