@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+- **Fixed: pop-ups ignored every click on first launch** (you had to force-quit). The ⌃⌥Q stop shortcut
+  added in 0.4.1 also watched TaskTrace's own windows, and that swallowed mouse clicks in its pop-ups.
+  It now only listens while you're in other apps and ignores everything but key presses; every pop-up
+  during a run has its own Stop button.
+- The build now launches the app fresh with no permissions, clicks through its first pop-ups from outside
+  like a real mouse, and refuses to publish if they don't respond.
+
 ## 0.5.2
 
 - First build signed with the TaskTrace certificate: from here on, updates keep your permissions.

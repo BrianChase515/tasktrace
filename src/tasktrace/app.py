@@ -201,14 +201,6 @@ class DialogUI:
         return {"verdict": "rejected", "comment": text or "(no details given)", "stop": i == 2}
 
 
-def _test_flags() -> dict:
-    """Switches used only by the build's diagnostics (a file the build writes; absent for everyone else)."""
-    try:
-        return json.loads((home() / ".test-flags.json").read_text())
-    except (OSError, ValueError):
-        return {}
-
-
 # --------------------------------------------------------------------------- the app
 
 class TaskTraceApp(rumps.App):
@@ -217,12 +209,10 @@ class TaskTraceApp(rumps.App):
         self.rec = None
         self.busy = False
         self.executor = None
-        self._monitors = []
-        if not _test_flags().get("no_key_monitors"):
-            self._monitors = [
-                NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey),
-                NSEvent.addLocalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey_local),
-            ]
+        # ⌃⌥Q stops a run while you're working in another app. Only a global monitor: a local one
+        # (watching TaskTrace's own windows) swallowed mouse clicks in its pop-ups. Every pop-up during
+        # a run has its own Stop button instead.
+        self._monitors = [NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey)]
         self._runs_sig = None
         self._rebuild()
         self._ticker = rumps.Timer(self._tick, 0.5)
@@ -278,7 +268,7 @@ class TaskTraceApp(rumps.App):
             ]
         elif self.busy:
             items += [
-                rumps.MenuItem("■ Stop the run  (⌃⌥Q)", callback=self.stop_run),
+                rumps.MenuItem("■ Stop the run  (⌃⌥Q from any app)", callback=self.stop_run),
                 rumps.MenuItem("Running a plan: answer the pop-ups as they appear"),
             ]
         else:
@@ -452,20 +442,23 @@ class TaskTraceApp(rumps.App):
               f"newest version from {REPO_URL}/releases")
 
     # ---- stopping a run
-    def _is_stop_hotkey(self, event) -> bool:
-        flags = int(event.modifierFlags())
-        return (int(event.keyCode()) == KEYCODE_Q and flags & CTRL and flags & OPT and not flags & CMD)
+    @staticmethod
+    def _is_stop_hotkey(event) -> bool:
+        try:
+            if int(event.type()) != 10:  # NSEventTypeKeyDown; never touch anything else
+                return False
+            flags = int(event.modifierFlags())
+            return int(event.keyCode()) == KEYCODE_Q and bool(flags & CTRL) and bool(flags & OPT) and not flags & CMD
+        except Exception:
+            return False
 
     def _hotkey(self, event) -> None:
         # While recording, the recorder handles ⌃⌥Q itself. During a run, it stops the run.
-        if self.executor is not None and self._is_stop_hotkey(event):
-            self.stop_run(None)
-
-    def _hotkey_local(self, event):
-        if self.executor is not None and self._is_stop_hotkey(event):
-            self.stop_run(None)
-            return None  # swallow it
-        return event
+        try:
+            if self.executor is not None and self._is_stop_hotkey(event):
+                self.stop_run(None)
+        except Exception:
+            pass
 
     def stop_run(self, _) -> None:
         ex = self.executor

@@ -119,7 +119,7 @@ From the menu bar you can then:
 - **Ask an AI to write a plan** (copies a request; paste it into ChatGPT, Copilot or Claude)
 - **Run a plan from clipboard** (copy the AI's reply first) and approve each step in a pop-up
 - **Copy fix request for AI** when something went wrong, so the AI sends back a corrected plan
-- **Stop the run** at any moment from the menu or with **⌃⌥Q**, even while a step's pop-up is open
+- **Stop the run** at any moment from the menu, with **⌃⌥Q** from any app, or with the Stop button on any step's pop-up
 - **Move to Trash…** any recording you no longer want (with its plans and run history)
 
 Everything is saved in `TaskTraces` in your home folder.
@@ -285,7 +285,8 @@ mouse and keyboard. Step mode's per-step approval makes that conversation easier
 ## Releases and signing
 
 Every push to `main` builds `TaskTrace.app`, signs it, and runs checks on a real Mac before publishing:
-a self-test, a dialog check that clicks every button the way a person would (launched normally and
+a self-test, a first launch with no permissions clicked through from outside the app, a dialog check
+that clicks every button the way a person would (launched normally and
 directly, repeating the timing-sensitive cases), and an update check that installs the new build over itself and makes sure a build signed
 by someone else, or a corrupted download, is refused. Only then is it published as the `latest`
 release with `latest.json`, which the in-app updater reads.

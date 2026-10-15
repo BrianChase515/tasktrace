@@ -69,9 +69,7 @@ jobs:
           echo "--- first launch with no permissions ---" | tee -a build.log
           python packaging/real_launch_check.py packaging/dist/TaskTrace.app "$PWD/first-launch" 2>&1 | tee -a build.log \
             || { echo "FIRST_LAUNCH_FAILED=1" >> "$GITHUB_ENV"; }
-          echo "--- experiment: same, without the stop-hotkey listener ---" | tee -a build.log
-          python packaging/real_launch_check.py packaging/dist/TaskTrace.app "$PWD/first-launch-nomon" '{"no_key_monitors": true}' 2>&1 \
-            | grep -E '"(clicks|closed|ok|found)"' | tee -a build.log || true
+          [ -f first-launch/sample.txt ] && { echo "--- where the app was stuck ---"; head -120 first-launch/sample.txt; } | tee -a build.log || true
           ( cd first-launch && zip -q ../first-launch.zip * ) || true
 
       - name: Allow the dialog check to click (on this build machine only)
@@ -85,12 +83,6 @@ jobs:
             done
           done
           sudo killall tccd 2>/dev/null || true
-
-      - name: Experiment, first launch once permissions are granted
-        run: |
-          echo "--- experiment: first launch with permissions granted ---" | tee -a build.log
-          python packaging/real_launch_check.py packaging/dist/TaskTrace.app "$PWD/first-launch-granted" 2>&1 \
-            | grep -E '"(clicks|closed|ok|found)"' | tee -a build.log || true
 
       - name: Dialog check (click every button like a person)
         run: |
