@@ -27,6 +27,7 @@ import queue
 import re
 import signal
 import subprocess
+import os
 import threading
 import time
 from pathlib import Path
@@ -38,6 +39,7 @@ from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyElementAtPosition,
     AXUIElementCreateSystemWide,
+    AXUIElementGetPid,
     AXUIElementSetMessagingTimeout,
     AXValueGetValue,
 )
@@ -229,23 +231,8 @@ def _notify(text: str) -> None:
 
 
 def check_permissions(request: bool = False) -> dict:
-    res = {"accessibility": bool(AXIsProcessTrusted())}
-    pre_sc = getattr(Quartz, "CGPreflightScreenCaptureAccess", None)
-    pre_in = getattr(Quartz, "CGPreflightListenEventAccess", None)
-    res["screen_recording"] = bool(pre_sc()) if pre_sc else None
-    res["input_monitoring"] = bool(pre_in()) if pre_in else None
-    if request:
-        if not res["accessibility"]:
-            try:
-                from ApplicationServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
-                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
-            except Exception:
-                pass
-        if res["screen_recording"] is False and hasattr(Quartz, "CGRequestScreenCaptureAccess"):
-            Quartz.CGRequestScreenCaptureAccess()
-        if res["input_monitoring"] is False and hasattr(Quartz, "CGRequestListenEventAccess"):
-            Quartz.CGRequestListenEventAccess()
-    return res
+    from . import permissions
+    return permissions.request_all() if request else permissions.status()
 
 
 # --------------------------------------------------------------------------- recorder
@@ -275,6 +262,8 @@ class Recorder:
         self._focus_cache: tuple = (0.0, None, False)
         self.crop_n = self.key_n = self.done_n = 0
         self.tap = None
+        self._own_pid = os.getpid()
+        self._ignored_buttons: set = set()
 
     # ---- plumbing
     def now(self) -> int:
@@ -302,7 +291,8 @@ class Recorder:
                 "pid": int(app.processIdentifier())}
 
     def _visible_windows(self) -> list[dict]:
-        return [w for w in _window_list() if self._bundle(w["pid"]) not in self.excluded]
+        return [w for w in _window_list()
+                if w["pid"] != self._own_pid and self._bundle(w["pid"]) not in self.excluded]
 
     @staticmethod
     def _wpub(w: dict) -> dict:
@@ -318,7 +308,8 @@ class Recorder:
         return None
 
     def _blocked(self) -> bool:
-        return self.paused or self.suppress or self.in_excluded
+        # Never record TaskTrace itself (its menu, dialogs, or the terminal it runs in is fine).
+        return self.paused or self.suppress or self.in_excluded or self.front.get("pid") == self._own_pid
 
     # ---- context
     def _ctx_for_window(self, w: dict | None) -> dict:
@@ -329,12 +320,19 @@ class Recorder:
             "window": {"title": w["title"], "id": w["id"], "bounds": w["bounds"]},
         }
 
-    def _mouse_ctx(self, x: int, y: int) -> tuple[dict, bool]:
+    def _mouse_ctx(self, x: int, y: int) -> tuple[dict | None, bool]:
+        """Context for a click, or (None, False) if the click landed on TaskTrace itself."""
         ctx = self._ctx_for_window(self._window_at(x, y))
         secure = False
         try:
             err, el = AXUIElementCopyElementAtPosition(self.system, float(x), float(y), None)
             if err == 0 and el is not None:
+                try:
+                    perr, pid = AXUIElementGetPid(el, None)
+                    if perr == 0 and pid == self._own_pid:
+                        return None, False
+                except Exception:
+                    pass
                 ctx["element"], secure = _element_info(el)
         except Exception:
             pass
@@ -413,11 +411,17 @@ class Recorder:
         p = Quartz.CGEventGetLocation(event)
         x, y = int(round(p.x)), int(round(p.y))
         if not down:
+            if button in self._ignored_buttons:
+                self._ignored_buttons.discard(button)
+                return
             self.emit({"type": "mouse_up", "button": button, "x": x, "y": y})
             return
         t = self.now()
         self._focus_cache = (0.0, None, False)
         ctx, secure = self._mouse_ctx(x, y)
+        if ctx is None:  # a click on TaskTrace's own menu or dialog
+            self._ignored_buttons.add(button)
+            return
         ev = {
             "t": t, "type": "mouse_down", "button": button, "x": x, "y": y,
             "clicks": int(Quartz.CGEventGetIntegerValueField(event, Quartz.kCGMouseEventClickState)),
@@ -485,7 +489,7 @@ class Recorder:
                 self.emit({"type": "paused" if excluded else "resumed", "reason": "excluded_app",
                            "app": front.get("name") if excluded else None})
             cur = {w["id"]: w for w in wins}
-            if self.paused or self.suppress or excluded:
+            if self.paused or self.suppress or excluded or front.get("pid") == self._own_pid:
                 prev, prev_bundle = cur, front.get("bundle_id")
                 time.sleep(POLL_S)
                 continue
@@ -537,30 +541,64 @@ class Recorder:
             except Exception as exc:
                 self.emit({"type": "error", "where": "capture", "error": repr(exc)[:300]})
 
-    # ---- main
-    def run(self) -> None:
-        started = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    # ---- lifecycle
+    def start(self) -> None:
+        """Install the event tap on the current (main) run loop and start the helper threads.
+
+        Returns immediately. The caller keeps the run loop running: the CLI via run(),
+        the menu-bar app via its own NSApplication loop.
+        """
+        self._started = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         self.front = self._front_app()
         self.windows = self._visible_windows()
-        initial = {"front_app": {k: v for k, v in self.front.items() if k != "pid"},
-                   "windows": [self._wpub(w) for w in self.windows[:15]]}
-
+        self._initial = {"front_app": {k: v for k, v in self.front.items() if k != "pid"},
+                         "windows": [self._wpub(w) for w in self.windows[:15]]}
         mask = 0
         for t in (*MOUSE_DOWN, *MOUSE_UP, Quartz.kCGEventKeyDown, Quartz.kCGEventScrollWheel):
             mask |= 1 << t
         self.tap = Quartz.CGEventTapCreate(Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
                                            Quartz.kCGEventTapOptionListenOnly, mask, self._on_event, None)
         if self.tap is None:
-            raise PermissionError("Could not create the event tap. Grant Input Monitoring and Accessibility "
-                                  "to your terminal app, then restart it.")
-        src = CFMachPortCreateRunLoopSource(None, self.tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), src, kCFRunLoopCommonModes)
+            self._out.close()
+            raise PermissionError("Could not watch input. Turn on Input Monitoring and Accessibility, "
+                                  "then restart the app.")
+        self._src = CFMachPortCreateRunLoopSource(None, self.tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), self._src, kCFRunLoopCommonModes)
         Quartz.CGEventTapEnable(self.tap, True)
-
-        threads = [threading.Thread(target=self._poll_loop, daemon=True),
-                   threading.Thread(target=self._worker, daemon=True)]
-        for th in threads:
+        self._threads = [threading.Thread(target=self._poll_loop, daemon=True),
+                         threading.Thread(target=self._worker, daemon=True)]
+        for th in self._threads:
             th.start()
+
+    def finish(self) -> Path:
+        """Stop capturing, wait for pending screenshots, and write meta.json. Safe to call once."""
+        self.stop.set()
+        Quartz.CGEventTapEnable(self.tap, False)
+        try:
+            from CoreFoundation import CFRunLoopRemoveSource
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), self._src, kCFRunLoopCommonModes)
+        except Exception:
+            pass
+        for th in self._threads:
+            th.join(timeout=15)
+        self._out.close()
+        meta = {
+            "name": self.name,
+            "goal": self.goal,
+            "started_at": self._started,
+            "ended_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            "recorder": f"tasktrace {__version__}",
+            "host": {"os": f"macOS {platform.mac_ver()[0]}", "machine": platform.machine(),
+                     "screens": _screens()},
+            "initial": self._initial,
+            "excluded_apps": sorted(self.excluded),
+        }
+        (self.run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return self.run_dir
+
+    def run(self) -> None:
+        """CLI: record until ctrl+opt+Q or ctrl+C."""
+        self.start()
         old_handler = signal.signal(signal.SIGINT, lambda *_: self.stop.set())
         _notify("Recording. ctrl+opt+Q to stop.")
         try:
@@ -568,23 +606,15 @@ class Recorder:
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, False)
         finally:
             signal.signal(signal.SIGINT, old_handler)
-            Quartz.CGEventTapEnable(self.tap, False)
-            for th in threads:
-                th.join(timeout=15)
-            self._out.close()
-            meta = {
-                "name": self.name,
-                "goal": self.goal,
-                "started_at": started,
-                "ended_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-                "recorder": f"tasktrace {__version__}",
-                "host": {"os": f"macOS {platform.mac_ver()[0]}", "machine": platform.machine(),
-                         "screens": _screens()},
-                "initial": initial,
-                "excluded_apps": sorted(self.excluded),
-            }
-            (self.run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            self.finish()
             _notify("Recording stopped")
+
+
+def new_run_dir(home: Path, name: str) -> Path:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "task"
+    run_dir = home / f"{dt.datetime.now():%Y%m%d-%H%M%S}-{slug}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
 
 
 def record_run(home: Path, name: str, goal: str = "", exclude: list[str] | None = None,
@@ -595,8 +625,6 @@ def record_run(home: Path, name: str, goal: str = "", exclude: list[str] | None 
         raise PermissionError("Missing macOS permissions: " + ", ".join(missing)
                               + ". Run `tasktrace doctor --request`, grant them to your terminal app, "
                                 "then restart the terminal.")
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "task"
-    run_dir = home / f"{dt.datetime.now():%Y%m%d-%H%M%S}-{slug}"
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir = new_run_dir(home, name)
     Recorder(run_dir, name, goal, DEFAULT_EXCLUDED | set(exclude or []), crops, keyframes).run()
     return run_dir

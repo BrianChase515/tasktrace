@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tasktrace"
-version = "0.2.0"
+version = "0.3.0"
 description = "Record a task on your Mac once. Get one compact trace an AI agent can understand and replicate."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,6 +21,7 @@ dependencies = [
   "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
   "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
   "pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'",
+  "rumps>=0.4.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

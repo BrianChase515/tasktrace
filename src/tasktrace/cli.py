@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     doc = sub.add_parser("doctor", help="check macOS permissions")
     doc.add_argument("--request", action="store_true", help="prompt for missing permissions")
     sub.add_parser("mcp", help="run the MCP server (stdio)")
+    sub.add_parser("app", help="start the menu-bar app (macOS)")
 
     # ---- the human-supervised loop: plan -> replay -> review -> revise
     pl = sub.add_parser("plan", help="turn a trace into a version-1 plan (no AI needed)")
@@ -186,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(lineage(plans)) or "No plans found.")
         return 0
 
-    if args.cmd in ("record", "doctor") and sys.platform != "darwin":
+    if args.cmd in ("record", "doctor", "app") and sys.platform != "darwin":
         print("Recording needs macOS. You can still compile, diff and serve traces here.", file=sys.stderr)
         return 2
 
@@ -240,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         if not all(v is not False for v in res.values()):
             print("Grant these to your terminal app in System Settings > Privacy & Security, then restart it.")
             return 1
+        return 0
+
+    if args.cmd == "app":
+        from .app import main as run_app
+        run_app()
         return 0
 
     if args.cmd == "mcp":

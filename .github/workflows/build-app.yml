@@ -1,0 +1,78 @@
+name: build-app
+
+# Builds TaskTrace.app (with its own Python inside), wraps it in a .dmg, and
+# publishes it as the "latest" pre-release so anyone can download it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-app
+  cancel-in-progress: true
+
+jobs:
+  dmg:
+    runs-on: macos-latest  # Apple silicon
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip 2>&1 | tee -a build.log
+          pip install py2app Pillow . 2>&1 | tee -a build.log
+
+      - name: Icon
+        working-directory: packaging
+        run: python make_icon.py 2>&1 | tee -a ../build.log
+
+      - name: Build TaskTrace.app
+        working-directory: packaging
+        run: python setup_app.py py2app 2>&1 | tail -n 200 | tee -a ../build.log
+
+      - name: Sign (ad-hoc) and self-test
+        run: |
+          APP=packaging/dist/TaskTrace.app
+          codesign --force --deep --sign - "$APP" 2>&1 | tee -a build.log
+          "$APP/Contents/MacOS/TaskTrace" --self-test 2>&1 | tee -a build.log
+
+      - name: Make .dmg
+        run: |
+          VERSION=$(python -c "import tasktrace; print(tasktrace.__version__)")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p dmg && cp -R packaging/dist/TaskTrace.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "TaskTrace" -srcfolder dmg -ov -format UDZO "TaskTrace-$VERSION.dmg" 2>&1 | tee -a build.log
+          du -h "TaskTrace-$VERSION.dmg" | tee -a build.log
+
+      - name: Publish as the "latest" download
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest "TaskTrace-$VERSION.dmg" build.log \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "TaskTrace $VERSION (latest build)" \
+            --notes "Download **TaskTrace-$VERSION.dmg**, open it, and drag TaskTrace into Applications.
+
+          First launch: macOS will say it can't verify the developer (this build isn't signed with a paid Apple Developer ID).
+          Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to TaskTrace. You only do this once.
+
+          Built from $GITHUB_SHA. Requires an Apple silicon Mac on macOS 13 or newer."
+
+      - name: Publish the build log on failure
+        if: failure()
+        run: |
+          touch build.log
+          gh release delete build-log --yes --cleanup-tag || true
+          gh release create build-log build.log --prerelease --target "$GITHUB_SHA" \
+            --title "Failed build log" --notes "Build log from a failed app build of $GITHUB_SHA."

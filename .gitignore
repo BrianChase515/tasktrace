@@ -7,3 +7,10 @@ build/
 .pytest_cache/
 .DS_Store
 TaskTraces/
+packaging/build/
+packaging/dist/
+packaging/TaskTrace.iconset/
+packaging/TaskTrace.icns
+packaging/icon-1024.png
+*.dmg
+build.log
