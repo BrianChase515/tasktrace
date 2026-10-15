@@ -53,16 +53,16 @@ jobs:
           VERSION=$(python -c "import tasktrace; print(tasktrace.__version__)")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p dmg && cp -R packaging/dist/TaskTrace.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "TaskTrace" -srcfolder dmg -ov -format UDZO "TaskTrace-$VERSION.dmg" 2>&1 | tee -a build.log
-          du -h "TaskTrace-$VERSION.dmg" | tee -a build.log
+          hdiutil create -volname "TaskTrace" -srcfolder dmg -ov -format UDZO "TaskTrace.dmg" 2>&1 | tee -a build.log
+          du -h "TaskTrace.dmg" | tee -a build.log
 
       - name: Publish as the "latest" download
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest "TaskTrace-$VERSION.dmg" build.log \
+          gh release create latest "TaskTrace.dmg" build.log \
             --prerelease --target "$GITHUB_SHA" \
             --title "TaskTrace $VERSION (latest build)" \
-            --notes "Download **TaskTrace-$VERSION.dmg**, open it, and drag TaskTrace into Applications.
+            --notes "Download **TaskTrace.dmg** (version $VERSION), open it, and drag TaskTrace into Applications.
 
           First launch: macOS will say it can't verify the developer (this build isn't signed with a paid Apple Developer ID).
           Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to TaskTrace. You only do this once.

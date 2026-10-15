@@ -96,12 +96,33 @@ These tools are complementary. tasktrace's bet is that the **file format** is th
 
 Review a trace before sharing it. Click crops are small, but they are screenshots.
 
-## Quickstart
+## Download (no coding needed)
+
+**[Download TaskTrace for Mac](https://github.com/BrianChase515/tasktrace/releases/download/latest/TaskTrace.dmg)**
+· Apple silicon · macOS 13+ · [all builds](https://github.com/BrianChase515/tasktrace/releases)
+
+1. Open the .dmg and drag **TaskTrace** into **Applications**.
+2. Open it. macOS will say it can't verify the developer. Go to **System Settings → Privacy & Security**,
+   scroll down, and click **Open Anyway**. (Once. This build isn't signed with a paid Apple Developer ID.)
+3. TaskTrace walks you through its three permissions. For each, it opens the right Settings page; you
+   switch TaskTrace on. Then it restarts itself. (After installing a new build, macOS may ask again.)
+4. Click **◉** in the menu bar → **Record a task…**. Do the task. Click **■ Stop recording**.
+
+From the menu bar you can then:
+
+- **Copy for AI** a recording, and paste it into any AI chat
+- **Ask an AI to write a plan** (copies a request; paste it into ChatGPT, Copilot or Claude)
+- **Run a plan from clipboard** (copy the AI's reply first) and approve each step in a pop-up
+- **Copy fix request for AI** when something went wrong, so the AI sends back a corrected plan
+
+Everything is saved in `TaskTraces` in your home folder.
+
+## Command line
 
 Requires macOS 13+ and Python 3.9+ (the Python that ships with macOS works; the MCP server needs 3.10+).
 
 ```bash
-pip install "tasktrace[mcp,images] @ git+https://github.com/<you>/tasktrace"
+pip install "tasktrace[mcp,images] @ git+https://github.com/BrianChase515/tasktrace"
 tasktrace doctor --request      # grant Accessibility, Input Monitoring, Screen Recording to your terminal
 tasktrace record "q3-report" --goal "Create the quarterly forecast report in Acme Portal"
 # ...do the task...  ctrl+opt+N note · ctrl+opt+D mark done · ctrl+opt+Q stop
@@ -118,6 +139,7 @@ Permissions apply to the app that runs Python (Terminal, iTerm, VS Code). Restar
 | `tasktrace diff <runA> <runB> [--write]` | Learn variables vs constants from two runs |
 | `tasktrace list` | List runs |
 | `tasktrace mcp` | Serve traces to MCP clients |
+| `tasktrace app` | Start the menu-bar app from your Python install |
 
 ## Use it with Claude
 
