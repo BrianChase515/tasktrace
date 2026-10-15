@@ -183,6 +183,10 @@
           "description": "Every interactive control visible in the same modal or form, including ones the person never touched.",
           "items": { "$ref": "#/$defs/control" }
         },
+        "form_same_as_step": {
+          "type": "integer",
+          "description": "The controls here are unchanged since that step, where they are listed in full."
+        },
         "progress": { "type": "string" },
         "modal": { "type": "object", "description": "Present when a list sits inside a modal: the modal's own context." }
       }

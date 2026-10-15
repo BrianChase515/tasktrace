@@ -68,7 +68,8 @@ SYNTHESIS_GUIDANCE = (
     "loop: at each turn read the visible form, fill the required fields, press the advance button, "
     "and stop at the terminal action (e.g. \"Submit application\") or when progress stops changing. "
     "`container_context.interactive_siblings` is the form schema of that page, including fields the "
-    "person never had to touch, so your script can handle pages that ask for more than this run did. "
+    "person never had to touch, so your script can handle pages that ask for more than this run did; "
+    "`form_same_as_step: N` means that form is unchanged since step N, so read it there. "
     "(5) VERIFY, DON'T ASSUME. After each action, check the corresponding `effect` "
     "(windows opened/closed/retitled, `dialog_opened`, `toggled`, `progress`) before continuing, and "
     "fail loudly rather than guessing. `settle_ms` is roughly how long the app took to respond. "
@@ -306,6 +307,27 @@ def attach_containers(steps: list[dict], events: list[dict]) -> None:
         ctx = by_ref.get(s.get("ref"))
         if ctx:
             s["container"] = ctx
+
+
+def dedupe_forms(steps: list[dict]) -> None:
+    """Say "same form as step N" rather than repeating a form that hasn't changed.
+
+    Working through a wizard means a dozen clicks inside one form; spelling out every field each
+    time is most of the file's size and tells the reader nothing new.
+    """
+    seen: dict[str, int] = {}
+    for s in steps:
+        cc = s.get("container_context") or {}
+        for blk in (cc, cc.get("modal") or {}):
+            sib = blk.get("interactive_siblings")
+            if not sib:
+                continue
+            key = json.dumps(sib, sort_keys=True, ensure_ascii=False)
+            if key in seen:
+                blk.pop("interactive_siblings")
+                blk["form_same_as_step"] = seen[key]
+            else:
+                seen[key] = s["id"]
 
 
 def attach_effects(steps: list[dict], events: list[dict]) -> None:
@@ -570,6 +592,7 @@ def compile_run(run_dir: Path, *, use_ocr: bool = True, embed_crops: bool = Fals
     attach_effects(raw, events)
     loose_notes = attach_notes(raw, events)
     steps = [_out_step(i, s, run_dir, use_ocr, embed_crops) for i, s in enumerate(raw, 1)]
+    dedupe_forms(steps)
     params = _assign_parameters(steps)
 
     # Success criteria: where things ended up, plus the "done" snapshot if one was taken.

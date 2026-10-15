@@ -281,13 +281,9 @@ def _snapshot(el, max_nodes: int = SNAPSHOT_NODES, depth: int = SNAPSHOT_DEPTH,
     Bounded three ways (nodes, depth, wall clock) because a web page's tree can be enormous
     and an unresponsive app can make every attribute read wait for its timeout.
     """
-    left = [max_nodes]
     deadline = time.monotonic() + budget_s
 
-    def rec(cur, d: int) -> dict | None:
-        if left[0] <= 0 or time.monotonic() > deadline:
-            return None
-        left[0] -= 1
+    def describe(cur) -> dict:
         node: dict = {}
         for key, attr in (("role", "AXRole"), ("subrole", "AXSubrole"),
                           ("role_description", "AXRoleDescription"), ("title", "AXTitle"),
@@ -306,15 +302,28 @@ def _snapshot(el, max_nodes: int = SNAPSHOT_NODES, depth: int = SNAPSHOT_DEPTH,
                 v = _ax_str(tui, "AXValue", 80) or _ax_str(tui, "AXTitle", 80)
                 if v:
                     node["title"] = v
-        if d < depth:
-            kids = [rec(c, d + 1) for c in (_ax(cur, "AXChildren") or [])[:60]]
-            kids = [k for k in kids if k]
-            if kids:
-                node["children"] = kids
-        return node or None
+        return node
 
     try:
-        return rec(el, 0)
+        root = describe(el)
+        # Breadth-first: a depth-first walk spends the whole budget inside the first branch,
+        # which on a web page is the navigation, and never reaches the panel being worked in.
+        queue, left = [(el, root, 0)], max_nodes - 1
+        while queue and left > 0 and time.monotonic() < deadline:
+            cur, node, d = queue.pop(0)
+            if d >= depth:
+                continue
+            kids = []
+            for child in (_ax(cur, "AXChildren") or [])[:60]:
+                if left <= 0:
+                    break
+                left -= 1
+                kid = describe(child)
+                kids.append(kid)
+                queue.append((child, kid, d + 1))
+            if kids:
+                node["children"] = kids
+        return root or None
     except Exception:
         return None
 
@@ -326,14 +335,29 @@ def _eq(a, b) -> bool:
         return False
 
 
-def _dialogish(el, role: str | None) -> bool:
+MODAL_MAX_AREA = 0.6  # of the window: a "modal" that fills the page is just the page
+MODAL_MAX_TITLE = 80  # a run-on title is page text, not a dialog's name
+
+
+def _dialogish(el, role: str | None, win_bounds: list | None = None) -> bool:
     """Does this ancestor look like a modal, sheet, or a titled form group worth describing?"""
     if role in axcontext.DIALOG_ROLES or _ax_str(el, "AXSubrole") in axcontext.DIALOG_SUBROLES:
         return True
     rd = (_ax_str(el, "AXRoleDescription") or "").lower()
     if "dialog" in rd or "modal" in rd or "alert" in rd:
         return True
-    return role in ("AXGroup", "AXScrollArea") and bool(_ax_str(el, "AXTitle") or _ax_str(el, "AXDescription"))
+    if role not in ("AXGroup", "AXScrollArea"):
+        return False
+    title = _ax_str(el, "AXTitle") or _ax_str(el, "AXDescription")
+    if not title or len(title) > MODAL_MAX_TITLE:
+        return False
+    # Web pages wrap everything in titled groups and landmark regions. The one a person is
+    # working inside is a panel on the page, not the page itself.
+    frame = _ax_frame(el)
+    if frame and win_bounds and win_bounds[2] > 0 and win_bounds[3] > 0:
+        if (frame[2] * frame[3]) > MODAL_MAX_AREA * (win_bounds[2] * win_bounds[3]):
+            return False
+    return True
 
 
 def _list_context(list_el, item_el) -> dict | None:
@@ -350,9 +374,13 @@ def _list_context(list_el, item_el) -> dict | None:
                                   _snapshot(item_el, max_nodes=120, depth=7))
 
 
-def container_context(el) -> dict | None:
-    """Walk up from the clicked element to the list row and/or modal it sits in."""
-    list_ctx = modal_ctx = None
+def container_context(el, win_bounds: list | None = None) -> tuple[dict | None, object]:
+    """Walk up from the clicked element to the list row and/or modal it sits in.
+
+    Also returns the container element itself, which becomes the thing the UI poller watches:
+    pointed at a whole browser window it never gets as far as the panel being worked in.
+    """
+    list_ctx = modal_ctx = watch = None
     cur, child = el, None
     for _ in range(CONTAINER_DEPTH):
         role = _ax_str(cur, "AXRole")
@@ -360,16 +388,18 @@ def container_context(el) -> dict | None:
             break
         if list_ctx is None and role in axcontext.LIST_ROLES and child is not None:
             list_ctx = _list_context(cur, child)
-        elif modal_ctx is None and _dialogish(cur, role):
+        elif modal_ctx is None and _dialogish(cur, role, win_bounds):
             # A group with one stray control isn't a form: keep walking until something is.
             modal_ctx = axcontext.modal_context(_snapshot(cur), min_controls=2)
+            if modal_ctx is not None:
+                watch = cur
         if modal_ctx is not None or role in ("AXWindow", "AXApplication", "AXMenuBar"):
             break
         parent = _ax(cur, "AXParent")
         if parent is None:
             break
         child, cur = cur, parent
-    return axcontext.merge_context(list_ctx, modal_ctx)
+    return axcontext.merge_context(list_ctx, modal_ctx), watch
 
 
 def _window_list() -> list[dict]:
@@ -454,6 +484,9 @@ class Recorder:
         self._ui_key: tuple | None = None
         self._ui_tick = 0
         self._ui_watch_until = 0.0
+        self._ui_root = None  # the container last clicked in, set by the worker thread
+        self._ui_root_gen = 0
+        self._ui_prev_gen = -1
         self.tap = None
         self._own_pid = os.getpid()
         self._ax_enabled: dict = {}  # pid -> accessibility attributes we switched on
@@ -655,7 +688,7 @@ class Recorder:
         # Describing the container means walking the tree, which is far too slow for the event
         # tap (macOS disables a tap that takes too long), so the worker thread does it.
         if target is not None:
-            self.jobs.put(("container", target, self.click_n))
+            self.jobs.put(("container", target, self.click_n, (ctx.get("window") or {}).get("bounds")))
         if self.crops and not secure:
             self.crop_n += 1
             rel = f"crops/{self.crop_n:04d}.png"
@@ -759,18 +792,27 @@ class Recorder:
         if not pid or pid == self._own_pid:
             return
         try:
-            app_el = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(app_el, 0.25)
-            win = _ax(app_el, "AXFocusedWindow") or _ax(app_el, "AXMainWindow")
-            if win is None:
+            root, gen = self._ui_root, self._ui_root_gen  # read once: the worker may replace them
+            if root is None:
+                app_el = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(app_el, 0.25)
+                root = _ax(app_el, "AXFocusedWindow") or _ax(app_el, "AXMainWindow")
+            if root is None:
                 return
-            state = axcontext.ui_state(_snapshot(win, max_nodes=UI_NODES, depth=UI_DEPTH),
-                                       max_nodes=UI_NODES)
+            node = _snapshot(root, max_nodes=UI_NODES, depth=UI_DEPTH)
+            if not node:  # the panel went away, or the app stopped answering: claim nothing
+                self._ui_prev, self._ui_root = None, None
+                return
+            state = axcontext.ui_state(node, max_nodes=UI_NODES)
             key = (pid, window_key)
             if key == self._ui_key:  # a different window is a fresh baseline, not a page change
                 for ch in axcontext.diff_ui_state(self._ui_prev, state):
+                    # Toggles and progress are matched by label, so they survive a change of
+                    # what we're watching. Dialogs are matched by presence, so they don't.
+                    if ch["change"].startswith("dialog_") and gen != self._ui_prev_gen:
+                        continue
                     self.emit({"type": "ui", **ch})
-            self._ui_key, self._ui_prev = key, state
+            self._ui_key, self._ui_prev, self._ui_prev_gen = key, state, gen
         except Exception as exc:
             self.emit({"type": "error", "where": "ui_poll", "error": repr(exc)[:300]})
 
@@ -782,10 +824,12 @@ class Recorder:
                 continue
             try:
                 if job[0] == "container":
-                    _, el, ref = job
-                    cc = container_context(el)
+                    _, el, ref, bounds = job
+                    cc, watch = container_context(el, bounds)
                     if cc:
                         self.emit({"type": "container", "ref": ref, "context": cc})
+                    # Watch the panel being worked in, not the whole window.
+                    self._ui_root, self._ui_root_gen = watch, self._ui_root_gen + 1
                 elif job[0] == "crop":
                     _, rect, rel = job
                     region = ",".join(str(v) for v in rect)

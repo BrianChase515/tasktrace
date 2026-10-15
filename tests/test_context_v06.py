@@ -14,7 +14,7 @@ from tasktrace import axcontext
 from tasktrace.cli import main
 from tasktrace.compile import compile_run
 from tasktrace.images import crop_rect, point_in_crop
-from tasktrace.ocr import pick_label
+from tasktrace.ocr import pick_label, trim_clipped
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROME = {"name": "Google Chrome", "bundle_id": "com.google.Chrome", "pid": 700}
@@ -199,6 +199,39 @@ def test_guidance_modes(tmp_path):
     assert "replay_guidance" in _run(tmp_path, events, guidance="replay")
     both = _run(tmp_path, events, guidance="both")
     assert "replay_guidance" in both and "automation_synthesis_guidance" in both
+
+
+# --------------------------------------------------------------------------- 5. from the first
+# real recording (LinkedIn Easy Apply, 45 steps): what the capture got wrong.
+
+def test_half_words_at_the_crop_edge_are_dropped_not_reported():
+    # The crop sliced "LinkedIn profile." and "Winston-Salem" mid-word. Half a word reads like a
+    # real label, so it is worse than none.
+    assert trim_clipped("edin profile.", [0.0, 0.4, 0.5, 0.2]) == "profile."
+    assert trim_clipped("Winston-Sale", [0.5, 0.4, 0.5, 0.2]) is None
+    assert trim_clipped("Continue to next step", [0.2, 0.4, 0.6, 0.2]) == "Continue to next step"
+
+
+def test_whole_text_beats_clipped_text_even_when_further_away():
+    items = [
+        {"text": "edin profile.", "conf": 0.9, "box": [0.0, 0.45, 0.45, 0.1]},  # cut by the edge
+        {"text": "Follow company", "conf": 0.9, "box": [0.55, 0.45, 0.35, 0.1]},
+    ]
+    assert pick_label(items, point=(0.3, 0.5)) == "Follow company"
+
+
+def test_a_form_repeated_across_steps_is_written_once():
+    form = [{"role": "AXTextField", "title": "First name", "value": "Brian"},
+            {"role": "AXButton", "title": "Continue to next step"}]
+    steps = [{"id": n, "container_context": {"kind": "modal", "interactive_siblings": list(form),
+                                             "progress": f"{n * 25} percent"}} for n in (1, 2, 3)]
+    steps[2]["container_context"]["interactive_siblings"] = [{"role": "AXButton", "title": "Submit"}]
+    from tasktrace.compile import dedupe_forms
+    dedupe_forms(steps)
+    assert steps[0]["container_context"]["interactive_siblings"] == form
+    assert steps[1]["container_context"] == {"kind": "modal", "form_same_as_step": 1,
+                                             "progress": "50 percent"}  # progress still per step
+    assert steps[2]["container_context"]["interactive_siblings"][0]["title"] == "Submit"
 
 
 def test_cli_guidance_flag_and_schema(tmp_path):

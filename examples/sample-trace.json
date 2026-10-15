@@ -1,6 +1,6 @@
 {
  "schema": "tasktrace/0.1",
- "generator": "tasktrace 0.6.0",
+ "generator": "tasktrace 0.6.1",
  "task": {
   "name": "q3-report",
   "goal": "Create the quarterly forecast report in Acme Portal",
@@ -28,7 +28,7 @@
    }
   ]
  },
- "automation_synthesis_guidance": "This is ground-truth telemetry from one human demonstration of a task on macOS, captured through the accessibility API. You are a TRACE-TO-CODE COMPILER, not a playback bot: your job is to write a standalone, generalized automation script for this task, not to repeat these exact clicks. Clicking the recorded positions on a live app will click the wrong rows, repeat the person's detours, and break the first time a form has a different number of pages. (1) Read `outline` first, then `steps`, and infer the SEMANTIC WORKFLOW: what the person was trying to achieve at each stage, not the literal input sequence. (2) PRUNE. Drop exploratory detours (opening something, finding nothing useful, backing out) and accidental repeats: clicks less than 1000 ms apart on the same element or container where the first produced no `effect`. A step with no `effect` that is immediately undone is noise. (3) GENERALIZE. Treat the strings in `target.element.title`, `target.path` and `container_context` as one instance, not as constants. Match on stable prefixes, roles and accessible names (e.g. a button whose name starts with \"Easy Apply\"), never on a row index, a pixel position or a full path copied verbatim. Use `parameters` for every value that varies; steps marked `secret` were typed into password fields and never recorded, so your script must prompt for them. (4) WRITE REAL CONTROL FLOW. `container_context.list_item_index` / `total_items` mean the person acted on one row of a list: emit a `for` loop over the rows with a predicate drawn from `item_text_summary`, not a click on that index. Repeated state-advancing clicks (the same \"Next\"/\"Continue\" button while `effect.progress` moves 0% -> 20% -> 40%) mean a `while` loop: at each turn read the visible form, fill the required fields, press the advance button, and stop at the terminal action (e.g. \"Submit application\") or when progress stops changing. `container_context.interactive_siblings` is the form schema of that page, including fields the person never had to touch, so your script can handle pages that ask for more than this run did. (5) VERIFY, DON'T ASSUME. After each action, check the corresponding `effect` (windows opened/closed/retitled, `dialog_opened`, `toggled`, `progress`) before continuing, and fail loudly rather than guessing. `settle_ms` is roughly how long the app took to respond. (6) `intent` is the person's own explanation of why a step happens; it outranks your inference. The task is done when `success_criteria` holds. Steps marked `optional` did not happen in every run. Locators, in order of robustness: target.element (role + title/description, scoped by target.path and the step's window), then target.ocr_label, then target.rel_xy (fraction of the window), and target.abs_xy only as a last resort.",
+ "automation_synthesis_guidance": "This is ground-truth telemetry from one human demonstration of a task on macOS, captured through the accessibility API. You are a TRACE-TO-CODE COMPILER, not a playback bot: your job is to write a standalone, generalized automation script for this task, not to repeat these exact clicks. Clicking the recorded positions on a live app will click the wrong rows, repeat the person's detours, and break the first time a form has a different number of pages. (1) Read `outline` first, then `steps`, and infer the SEMANTIC WORKFLOW: what the person was trying to achieve at each stage, not the literal input sequence. (2) PRUNE. Drop exploratory detours (opening something, finding nothing useful, backing out) and accidental repeats: clicks less than 1000 ms apart on the same element or container where the first produced no `effect`. A step with no `effect` that is immediately undone is noise. (3) GENERALIZE. Treat the strings in `target.element.title`, `target.path` and `container_context` as one instance, not as constants. Match on stable prefixes, roles and accessible names (e.g. a button whose name starts with \"Easy Apply\"), never on a row index, a pixel position or a full path copied verbatim. Use `parameters` for every value that varies; steps marked `secret` were typed into password fields and never recorded, so your script must prompt for them. (4) WRITE REAL CONTROL FLOW. `container_context.list_item_index` / `total_items` mean the person acted on one row of a list: emit a `for` loop over the rows with a predicate drawn from `item_text_summary`, not a click on that index. Repeated state-advancing clicks (the same \"Next\"/\"Continue\" button while `effect.progress` moves 0% -> 20% -> 40%) mean a `while` loop: at each turn read the visible form, fill the required fields, press the advance button, and stop at the terminal action (e.g. \"Submit application\") or when progress stops changing. `container_context.interactive_siblings` is the form schema of that page, including fields the person never had to touch, so your script can handle pages that ask for more than this run did; `form_same_as_step: N` means that form is unchanged since step N, so read it there. (5) VERIFY, DON'T ASSUME. After each action, check the corresponding `effect` (windows opened/closed/retitled, `dialog_opened`, `toggled`, `progress`) before continuing, and fail loudly rather than guessing. `settle_ms` is roughly how long the app took to respond. (6) `intent` is the person's own explanation of why a step happens; it outranks your inference. The task is done when `success_criteria` holds. Steps marked `optional` did not happen in every run. Locators, in order of robustness: target.element (role + title/description, scoped by target.path and the step's window), then target.ocr_label, then target.rel_xy (fraction of the window), and target.abs_xy only as a last resort.",
  "parameters": [
   {
    "name": "report_title",
@@ -322,40 +322,7 @@
      "subrole": "AXApplicationDialog",
      "title": "Report Wizard"
     },
-    "interactive_siblings": [
-     {
-      "role": "AXTextField",
-      "title": "Report title",
-      "placeholder": "e.g. Q1 forecast"
-     },
-     {
-      "role": "AXTextField",
-      "title": "Period end",
-      "placeholder": "YYYY-MM-DD"
-     },
-     {
-      "role": "AXPopUpButton",
-      "title": "Template",
-      "value": "Standard forecast"
-     },
-     {
-      "role": "AXCheckBox",
-      "title": "Share with finance",
-      "value": "1"
-     },
-     {
-      "role": "AXSecureTextField",
-      "title": "Approval PIN"
-     },
-     {
-      "role": "AXButton",
-      "title": "Create"
-     },
-     {
-      "role": "AXButton",
-      "title": "Cancel"
-     }
-    ]
+    "form_same_as_step": 2
    },
    "effect": {
     "closed": [

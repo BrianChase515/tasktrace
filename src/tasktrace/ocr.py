@@ -47,7 +47,7 @@ def pick_label(items: list[dict], min_conf: float = 0.3,
     else is close.
     """
     px, py = point
-    best, best_score = None, 99.0
+    best, best_box, best_score = None, None, 99.0
     for o in items:
         text = o["text"].strip()
         if o["conf"] < min_conf or not text:
@@ -57,11 +57,37 @@ def pick_label(items: list[dict], min_conf: float = 0.3,
         score = (cx - px) ** 2 + 4 * (cy - py) ** 2  # vertical distance matters more: lines are wide
         if x <= px <= x + w and y <= py <= y + h:
             score -= 1.0  # the click landed on this text
-        if x < 0.01 or x + w > 0.99:
-            score += 0.5  # clipped by the crop edge
+        if any(_clipped(o["box"])):
+            score += 1.2  # cut off by the crop edge: only wins if nothing whole is near
         if score < best_score:
-            best, best_score = text, score
+            best, best_box, best_score = text, o["box"], score
+    best = trim_clipped(best, best_box)
     return best[:80] if best else None
+
+
+def _clipped(box) -> tuple[bool, bool]:
+    x, _y, w, _h = box
+    return x < 0.01, x + w > 0.99
+
+
+def trim_clipped(text: str | None, box) -> str | None:
+    """Drop words the crop sliced in half, rather than reporting them as real text.
+
+    A crop can only be cut to the element's bounds when the element has sensible bounds; clicking
+    a large region still slices whatever sits at the edge, and half a word ("edin profile.",
+    "Winston-Sale") is worse than no label at all, because it reads like a real one.
+    """
+    if not text or box is None:
+        return text
+    left, right = _clipped(box)
+    if not (left or right):
+        return text
+    words = text.split()
+    if left:
+        words = words[1:]
+    if right and words:
+        words = words[:-1]
+    return " ".join(words) or None
 
 
 def label_near_point(path: Path, point: tuple[float, float] = (0.5, 0.5),

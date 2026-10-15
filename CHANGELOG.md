@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1
+
+Fixes from the first real recording (LinkedIn Easy Apply, 45 steps):
+
+- **Progress and checkboxes inside a page are recorded now.** The watcher looked at the whole browser
+  window and gave up after 400 elements, which on a page that size never reached the panel being worked
+  in, so an application going 0% -> 25% -> 50% -> 100% recorded no change at all. It now watches the
+  panel you last clicked in, and reads the tree a level at a time instead of diving down the first branch.
+- **Half-words are no longer reported as labels.** Clicking a large region still slices whatever sits at
+  the crop's edge; a sliced word ("edin profile.", "Winston-Sale") is dropped rather than recorded, and
+  complete text nearby wins over cut-off text.
+- **A page-sized region is no longer called a modal**, so clicks on a list stopped carrying a copy of the
+  whole page's controls, and a form repeated across a dozen steps of a wizard is written once and
+  referenced after that (`form_same_as_step`). About 15% off a real trace.
+
 ## 0.6.0
 
 TaskTrace's output is aimed at an AI that writes a *script* for the task, not one that replays
