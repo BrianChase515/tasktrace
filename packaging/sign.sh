@@ -4,30 +4,29 @@
 # macOS remembers permissions (Accessibility, Input Monitoring, Screen Recording) by the app's
 # signature. Signing every build with the same certificate means updates keep their permissions.
 #
-# The certificate comes from the TASKTRACE_SIGNING_P12 secret (base64 .p12). Without it, a
-# throwaway certificate is made so the build still works, but permissions reset on every update.
+# The certificate comes from the TASKTRACE_SIGNING_P12 secret (base64 .p12). Without it the build
+# is ad-hoc signed: it still works, but permissions reset on every update.
 set -eo pipefail
 
 APP="$1"
 P12_PASSWORD="tasktrace"          # protects the file in transit only; the secret itself is what's private
 IDENTITY="TaskTrace Signing"
-KEYCHAIN="$RUNNER_TEMP/tasktrace-signing.keychain-db"
+KEYCHAIN="${RUNNER_TEMP:-/tmp}/tasktrace-signing-$(uuidgen).keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
 OPENSSL=/usr/bin/openssl            # macOS LibreSSL: reads and writes the .p12 format `security` expects
 WORK="$(mktemp -d)"
 
-if [ -n "$TASKTRACE_SIGNING_P12" ]; then
-  echo "Signing with the TaskTrace certificate (stable: permissions carry over between updates)"
-  echo "$TASKTRACE_SIGNING_P12" | base64 --decode > "$WORK/cert.p12"
-  echo "stable" > signing-mode.txt
-else
-  echo "::warning::No TASKTRACE_SIGNING_P12 secret. Using a throwaway certificate; permissions will reset on every update."
-  "$OPENSSL" req -x509 -newkey rsa:2048 -sha256 -days 30 -nodes -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
-    -subj "/CN=$IDENTITY" -extensions v3 -config <(printf '[req]\ndistinguished_name=dn\n[dn]\n[v3]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n')
-  "$OPENSSL" pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -name "$IDENTITY" \
-    -passout "pass:$P12_PASSWORD" -out "$WORK/cert.p12"
-  echo "throwaway" > signing-mode.txt
+if [ -z "$TASKTRACE_SIGNING_P12" ]; then
+  echo "::warning::No TASKTRACE_SIGNING_P12 secret: ad-hoc signing. Permissions will reset on every update."
+  codesign --force --deep --sign - "$APP"
+  echo "adhoc" > signing-mode.txt
+  rm -rf "$WORK"
+  exit 0
 fi
+
+echo "Signing with the TaskTrace certificate (stable: permissions carry over between updates)"
+echo "$TASKTRACE_SIGNING_P12" | base64 --decode > "$WORK/cert.p12"
+echo "stable" > signing-mode.txt
 
 "$OPENSSL" pkcs12 -in "$WORK/cert.p12" -passin "pass:$P12_PASSWORD" -nokeys -clcerts -out "$WORK/cert.pem"
 

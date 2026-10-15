@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 
 RELEASE = "https://github.com/BrianChase515/tasktrace/releases/download/latest"
+# Fingerprint of the TaskTrace signing certificate (public). Builds signed with it keep their permissions.
+STABLE_CERT = "f1a757394b721ed9abb7585fd3089d4fe7e4e35a"
 INFO_URL = f"{RELEASE}/latest.json"
 
 
@@ -53,13 +55,22 @@ def designated_requirement(app: Path) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def is_stable(dr: str | None) -> bool:
+    return bool(dr) and STABLE_CERT in dr.lower()
+
+
 def same_signer(current_dr: str | None, new_dr: str | None) -> bool:
-    """True when the new build's signature would satisfy the same check macOS uses for permissions."""
+    """May the new build replace the current one?
+
+    Once TaskTrace is signed with the project certificate, only builds signed with that same
+    certificate may replace it, so a tampered download can never inherit its permissions. Before
+    that (ad-hoc or temporary signatures), permissions reset on every update anyway, so any valid
+    build may replace it."""
     if not new_dr:
         return False
-    if not current_dr or "cdhash" in current_dr:
-        return True  # current build is ad-hoc signed: nothing to preserve, any valid build may replace it
-    return current_dr == new_dr
+    if is_stable(current_dr):
+        return new_dr == current_dr
+    return True
 
 
 def install(info: dict, app_path: Path, log=print) -> Path:

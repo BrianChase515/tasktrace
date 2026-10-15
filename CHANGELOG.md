@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1
+
+- **In-app updates**: "Check for updates…" in the menu, plus a quiet check at launch and every 6 hours
+  (never during a recording or a run). Downloads are checked against their published checksum and must be
+  signed with the TaskTrace certificate before they replace the app.
+- **Permissions survive updates**: builds are signed with a long-lived TaskTrace certificate, so macOS
+  recognizes each update as the same app.
+- **Dialogs**: TaskTrace now becomes a regular app while a pop-up is open and uses the newer way to come
+  to the front on macOS 14 and later, keeps pop-ups above other windows and on every Space, and no longer
+  hides itself between pop-ups.
+- **Permissions menu**: each permission has its own item that opens its Settings page directly, with no
+  pop-up involved, plus "Restart TaskTrace".
+- **Build checks**: every build clicks through its own dialogs on a real Mac, tests an update end to end,
+  and is only published if everything passes.
+
 ## 0.4.1
 
 - **Stop a run at any time**: ⌃⌥Q or "■ Stop the run" in the menu-bar app (it also closes an open step

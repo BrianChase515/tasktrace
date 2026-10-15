@@ -45,6 +45,15 @@ jobs:
         working-directory: packaging
         run: python setup_app.py py2app 2>&1 | tail -n 200 | tee -a ../build.log
 
+      - name: Check the certificate format works (scratch copy, test-only certificate)
+        run: |
+          # packaging/format-test-only.p12 is public and trusted by nothing; it only proves a .p12
+          # made the same way as the real one imports and signs on this macOS.
+          ditto packaging/dist/TaskTrace.app "$RUNNER_TEMP/scratch/TaskTrace.app"
+          TASKTRACE_SIGNING_P12="$(base64 < packaging/format-test-only.p12)" \
+            bash packaging/sign.sh "$RUNNER_TEMP/scratch/TaskTrace.app" 2>&1 | tee -a build.log
+          rm -rf "$RUNNER_TEMP/scratch" signing-mode.txt
+
       - name: Sign with the TaskTrace certificate
         env:
           TASKTRACE_SIGNING_P12: ${{ secrets.TASKTRACE_SIGNING_P12 }}

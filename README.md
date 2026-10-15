@@ -109,7 +109,8 @@ Review a trace before sharing it. Click crops are small, but they are screenshot
 2. Open it. macOS will say it can't verify the developer. Go to **System Settings → Privacy & Security**,
    scroll down, and click **Open Anyway**. (Once. This build isn't signed with a paid Apple Developer ID.)
 3. TaskTrace walks you through its three permissions. For each, it opens the right Settings page; you
-   switch TaskTrace on. Then it restarts itself. (After installing a new build, macOS may ask again.)
+   switch TaskTrace on. Then it restarts itself. If a pop-up ever won't respond, use **◉ → Permissions**:
+   each item there opens its Settings page directly.
 4. Click **◉** in the menu bar → **Record a task…**. Do the task. Click **■ Stop recording**.
 
 From the menu bar you can then:
@@ -122,6 +123,11 @@ From the menu bar you can then:
 - **Move to Trash…** any recording you no longer want (with its plans and run history)
 
 Everything is saved in `TaskTraces` in your home folder.
+
+**Updates** install from inside the app: **◉ → Check for updates…** (it also checks on its own and asks
+first, never during a recording or a run). Updates keep your permissions, because every build is signed
+with the same TaskTrace certificate, and the updater refuses any download that isn't, or whose checksum
+doesn't match.
 
 ## Command line
 
@@ -275,6 +281,19 @@ mouse and keyboard. Step mode's per-step approval makes that conversation easier
 - On-screen overlay for step mode (approve and comment without switching to the terminal)
 - MCP tools for the loop, so an agent can request a replay and read its audit
 - Windows recorder (UI Automation) emitting the same format
+
+## Releases and signing
+
+Every push to `main` builds `TaskTrace.app`, signs it, and runs checks on a real Mac before publishing:
+a self-test, a dialog check that clicks every button the way a person would (launched normally and
+directly), and an update check that installs the new build over itself and makes sure a build signed
+by someone else, or a corrupted download, is refused. Only then is it published as the `latest`
+release with `latest.json`, which the in-app updater reads.
+
+macOS keeps permissions per signing identity, so builds are signed with a long-lived certificate kept in
+the `TASKTRACE_SIGNING_P12` repository secret (a base64 `.p12`). Without that secret, builds are ad-hoc
+signed and permissions reset on every update. The certificate's fingerprint is pinned in
+`src/tasktrace/updater.py` as `STABLE_CERT`.
 
 ## Development
 

@@ -1,7 +1,9 @@
 from tasktrace.updater import is_newer, parse_version, same_signer
 
-CERT = 'identifier "io.github.brianchase515.tasktrace" and certificate root = H"ab12"'
-OTHER = 'identifier "io.github.brianchase515.tasktrace" and certificate root = H"ff00"'
+from tasktrace.updater import STABLE_CERT
+
+CERT = f'identifier "io.github.brianchase515.tasktrace" and certificate leaf = H"{STABLE_CERT}"'
+OTHER = 'identifier "io.github.brianchase515.tasktrace" and certificate leaf = H"ff00ff00"'
 ADHOC = 'cdhash H"0123456789"'
 
 
@@ -15,6 +17,7 @@ def test_same_signer_rules():
     assert same_signer(CERT, CERT)
     assert not same_signer(CERT, OTHER)  # a different certificate can never take over
     assert not same_signer(CERT, ADHOC)
-    assert same_signer(ADHOC, CERT)  # moving off a throwaway signature is allowed once
+    assert same_signer(ADHOC, CERT)  # moving off a temporary signature is allowed
+    assert same_signer(OTHER, CERT)  # e.g. a build signed before the project certificate existed
     assert same_signer(None, CERT)
     assert not same_signer(CERT, None)

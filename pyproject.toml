@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tasktrace"
-version = "0.5.0"
+version = "0.5.1"
 description = "Record a task on your Mac once. Get one compact trace an AI agent can understand and replicate."
 readme = "README.md"
 requires-python = ">=3.9"
