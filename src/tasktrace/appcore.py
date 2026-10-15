@@ -69,6 +69,7 @@ VERDICT_TITLES = {
     "re_record": "The app has changed since you recorded this",
     "tool_bug": "TaskTrace hit a bug",
     "dry_run": "Check complete",
+    "stopped": "Stopped",
 }
 
 
@@ -77,6 +78,15 @@ def result_summary(audit: dict, review: dict, max_items: int = 5) -> tuple[str, 
     verdict = review.get("verdict", "revise")
     title = VERDICT_TITLES.get(verdict, "Finished")
     outcomes = (audit.get("summary") or {}).get("outcomes", {})
+    if verdict == "stopped" or (audit.get("stopped_by") and verdict != "dry_run"):
+        ran = [e for e in audit.get("entries", []) if e["outcome"] not in ("stopped", "not_run")]
+        title = VERDICT_TITLES["stopped"]
+        body = (f"You stopped the run after {len(ran)} of {len(audit.get('entries', []))} steps. "
+                "Nothing after that ran.")
+        serious = [f for f in review.get("findings", []) if f["severity"] in ("high", "medium")]
+        if serious:
+            body += "\n\nBefore you stopped:\n" + "\n".join(f"• Step {f['step']}: {f['summary']}" for f in serious[:max_items])
+        return title, body, any(f["route_to"] == "author" for f in serious)
     if verdict == "dry_run":
         missing = outcomes.get("locator_failed", 0)
         body = ("Every step's target was found on screen." if not missing

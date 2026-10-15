@@ -118,6 +118,8 @@ From the menu bar you can then:
 - **Ask an AI to write a plan** (copies a request; paste it into ChatGPT, Copilot or Claude)
 - **Run a plan from clipboard** (copy the AI's reply first) and approve each step in a pop-up
 - **Copy fix request for AI** when something went wrong, so the AI sends back a corrected plan
+- **Stop the run** at any moment from the menu or with **⌃⌥Q**, even while a step's pop-up is open
+- **Move to Trash…** any recording you no longer want (with its plans and run history)
 
 Everything is saved in `TaskTraces` in your home folder.
 
@@ -214,7 +216,9 @@ version, parent and a changelog where each change cites the review finding it fi
 the plan and author it ran, the operator, which locator matched, what was expected versus what happened,
 before/after screenshots, and every human verdict.
 
-**Safety rails.** Step mode confirms every step. Watch mode still stops for anything that saves, submits,
+**Safety rails.** You can stop a run at any moment: ⌃⌥Q or **■ Stop the run** in the app, ctrl+C in the
+terminal. The click or keystroke in progress finishes and nothing after it runs; the audit still gets
+written and says you stopped it. Step mode confirms every step. Watch mode still stops for anything that saves, submits,
 sends, deletes, pays or creates, and for any target found only by position. A typo at a prompt re-asks; it
 never means "go". Raw screen coordinates are off unless you pass `--allow-abs`. `--mode dry-run` checks
 that every target can be found without touching anything. If an expected window doesn't appear, the run

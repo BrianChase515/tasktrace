@@ -66,6 +66,8 @@ def triage(audit: dict, plan: dict | None = None) -> dict:
                 f"The person did this step by hand ({e.get('handoff')}). Find out what the executor got wrong.")
         elif out == "skipped":
             add(e, "skipped", "human", "low", "The person skipped this step. Is it still needed?")
+        elif out == "stopped" and e.get("stopped_by"):
+            add(e, "stopped_by_person", "human", "low", "The person stopped the run before this step.")
         elif out == "stopped":
             add(e, "stopped", "human", "medium", "The person stopped the run here.")
 
@@ -86,6 +88,8 @@ def triage(audit: dict, plan: dict | None = None) -> dict:
     routes = sorted({f["route_to"] for f in blocking})
     if audit.get("result") == "dry_run":
         verdict = "dry_run"
+    elif audit.get("stopped_by") and not blocking:
+        verdict = "stopped"
     elif not blocking and audit.get("result") == "completed":
         verdict = "pass"
     elif routes == ["executor"]:
@@ -102,6 +106,7 @@ def triage(audit: dict, plan: dict | None = None) -> dict:
         "re_record": "Record the task again (tasktrace record) and regenerate the plan from the new trace.",
         "tool_bug": "File the executor error against tasktrace; the plan itself looks fine.",
         "dry_run": "Fix any locator failures, then run for real.",
+        "stopped": "Stopped on request. Run it again whenever you're ready.",
     }[verdict]
 
     return {

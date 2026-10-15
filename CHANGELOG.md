@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- **Stop a run at any time**: ⌃⌥Q or "■ Stop the run" in the menu-bar app (it also closes an open step
+  pop-up), or ctrl+C in the terminal. The step in progress finishes its current action, nothing after it
+  runs, waits for an app to respond are cut short, and the audit records who stopped it.
+- A deliberate stop is reported as "Stopped", not as a failure that needs fixing.
+- **Delete recordings** from the app: "Move to Trash…" under each recorded task. It can be restored from the Trash.
+
 ## 0.4.0
 
 Fixes from the first real-world recording (a 70-step task in Chrome).

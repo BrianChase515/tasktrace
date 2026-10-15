@@ -20,11 +20,12 @@ from AppKit import (
     NSAlert,
     NSApplication,
     NSBundle,
+    NSEvent,
     NSPasteboard,
     NSPasteboardTypeString,
     NSTextField,
 )
-from Foundation import NSMakeRect
+from Foundation import NSURL, NSFileManager, NSMakeRect
 from PyObjCTools import AppHelper
 
 from . import __version__, permissions
@@ -40,6 +41,10 @@ TITLE_IDLE = "◉"
 TITLE_REC = "● REC"
 TITLE_PAUSED = "❚❚ REC"
 TITLE_BUSY = "▶ Running"
+TITLE_STOPPING = "■ Stopping…"
+KEY_DOWN_MASK = 1 << 10  # NSEventMaskKeyDown
+CTRL, OPT, CMD = 1 << 18, 1 << 19, 1 << 20  # NSEventModifierFlag Control / Option / Command
+KEYCODE_Q = 12
 STATE_FILE = ".app-state.json"
 
 
@@ -85,6 +90,8 @@ def alert(title: str, text: str = "", buttons=("OK",), field: str | None = None,
         a.setAccessoryView_(tf)
         a.window().setInitialFirstResponder_(tf)
     choice = int(a.runModal()) - 1000  # NSAlertFirstButtonReturn == 1000
+    if choice < 0:  # dismissed by the stop hotkey: treat as the last button, which is always the safe one
+        choice = len(buttons) - 1
     typed = str(tf.stringValue()) if tf is not None else None
     app.hide_(None)  # hand focus back to whatever the person was working in
     return choice, typed
@@ -114,6 +121,9 @@ def reveal(path: Path) -> None:
 
 class DialogUI:
     """The executor's questions, as dialogs. Called from the replay thread."""
+
+    def __init__(self, stopping=lambda: False):
+        self.stopping = stopping  # true once the person asked to stop the run
 
     def ask_value(self, name: str, question: str | None = None, options: list | None = None) -> str:
         title = question or f"What should “{name}” be this time?"
@@ -155,6 +165,8 @@ class DialogUI:
                           ("Looks right", "Wrong, keep going", "Wrong, stop here"), field="",
                           placeholder="What went wrong? (optional if it looks right)")
         text = (text or "").strip()
+        if self.stopping():
+            return None  # the run was stopped while this was open; nothing to record
         if i == 0:
             return {"verdict": "approved", **({"comment": text} if text else {})}
         return {"verdict": "rejected", "comment": text or "(no details given)", "stop": i == 2}
@@ -167,6 +179,11 @@ class TaskTraceApp(rumps.App):
         super().__init__("TaskTrace", title=TITLE_IDLE, quit_button=None)
         self.rec = None
         self.busy = False
+        self.executor = None
+        self._monitors = [
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey_local),
+        ]
         self._runs_sig = None
         self._rebuild()
         self._ticker = rumps.Timer(self._tick, 0.5)
@@ -201,6 +218,7 @@ class TaskTraceApp(rumps.App):
                 rumps.MenuItem("Repeat it now…", callback=lambda _, d=d: self.replay_recording(d)),
                 rumps.separator,
                 rumps.MenuItem("Show in Finder", callback=lambda _, d=d: reveal(d / "trace.json")),
+                rumps.MenuItem("Move to Trash…", callback=lambda _, d=d, r=row: self.delete_recording(d, r)),
             ])
             root.add(item)
         return root
@@ -217,7 +235,10 @@ class TaskTraceApp(rumps.App):
                 rumps.MenuItem("Resume" if paused else "Pause  (⌃⌥P)", callback=self.toggle_pause),
             ]
         elif self.busy:
-            items.append(rumps.MenuItem("Running a plan… answer the dialogs as they appear"))
+            items += [
+                rumps.MenuItem("■ Stop the run  (⌃⌥Q)", callback=self.stop_run),
+                rumps.MenuItem("Running a plan: answer the pop-ups as they appear"),
+            ]
         else:
             items.append(rumps.MenuItem("● Record a task…", callback=self.record))
         items += [
@@ -314,6 +335,49 @@ class TaskTraceApp(rumps.App):
     def _require(self, *needed: str) -> bool:
         miss = [n for n in permissions.missing() if n in needed]
         return True if not miss else self.setup_permissions(None)
+
+    # ---- stopping a run
+    def _is_stop_hotkey(self, event) -> bool:
+        flags = int(event.modifierFlags())
+        return (int(event.keyCode()) == KEYCODE_Q and flags & CTRL and flags & OPT and not flags & CMD)
+
+    def _hotkey(self, event) -> None:
+        # While recording, the recorder handles ⌃⌥Q itself. During a run, it stops the run.
+        if self.executor is not None and self._is_stop_hotkey(event):
+            self.stop_run(None)
+
+    def _hotkey_local(self, event):
+        if self.executor is not None and self._is_stop_hotkey(event):
+            self.stop_run(None)
+            return None  # swallow it
+        return event
+
+    def stop_run(self, _) -> None:
+        ex = self.executor
+        if ex is None or ex.stopping:
+            return
+        ex.request_stop("person")
+        self.title = TITLE_STOPPING
+        app = NSApplication.sharedApplication()
+        if app.modalWindow() is not None:  # a step's pop-up is open: close it
+            app.abortModal()
+        notify("Stopping", "Nothing else will run. The step in progress finishes first.")
+
+    # ---- managing recordings
+    def delete_recording(self, run_dir: Path, row: dict) -> None:
+        if self.busy:
+            alert("A plan is running", "Stop the run first, then delete the recording.")
+            return
+        i, _ = alert(f"Move “{run_label(row)}” to the Trash?",
+                     "This removes the recording and any plans, runs and reviews made from it. "
+                     "You can restore it from the Trash.", ("Move to Trash", "Cancel"))
+        if i != 0:
+            return
+        ok, _, err = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
+            NSURL.fileURLWithPath_(str(run_dir)), None, None)
+        if not ok:
+            alert("Couldn't move it to the Trash", str(err))
+        self._rebuild()
 
     # ---- recording
     def record(self, _) -> None:
@@ -465,7 +529,10 @@ class TaskTraceApp(rumps.App):
                     on_main(MacDriver.prepare, self, step)
 
             audit_dir = plan_path.parent / "audits"
-            audit = Executor(plan, AppDriver(), DialogUI(), mode=mode, audit_dir=audit_dir).run()
+            ex = Executor(plan, AppDriver(), None, mode=mode, audit_dir=audit_dir)
+            ex.ui = DialogUI(stopping=lambda: ex.stopping)
+            self.executor = ex
+            audit = ex.run()
             review = triage(audit, plan)
             (audit_dir / f"{audit['audit_id']}.review.json").write_text(
                 json.dumps(review, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -476,6 +543,7 @@ class TaskTraceApp(rumps.App):
 
     def _replay_done(self, plan, audit, review, audit_dir: Path) -> None:
         self.busy = False
+        self.executor = None
         self.title = TITLE_IDLE
         self._rebuild()
         title, body, offer_fix = result_summary(audit, review)
@@ -490,6 +558,7 @@ class TaskTraceApp(rumps.App):
 
     def _replay_failed(self, err: str) -> None:
         self.busy = False
+        self.executor = None
         self.title = TITLE_IDLE
         self._rebuild()
         alert("TaskTrace hit a bug while running the plan", f"{err}\n\nPlease report it at {REPO_URL}/issues")

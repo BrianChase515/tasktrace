@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import getpass
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -147,6 +148,20 @@ class Executor:
         self.effect_timeout, self.poll, self.allow_abs = effect_timeout, poll, allow_abs
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.audit_id = f"{plan.get('plan_id', 'plan')}-v{plan.get('version', 1)}-{stamp}"
+        self._stop = threading.Event()
+        self.stopped_by: str | None = None
+
+    def request_stop(self, by: str = "person") -> None:
+        """Stop the run as soon as possible. Safe to call from any thread, at any time.
+
+        The step in progress finishes its current click or keystroke; nothing after it runs."""
+        if not self._stop.is_set():
+            self.stopped_by = by
+            self._stop.set()
+
+    @property
+    def stopping(self) -> bool:
+        return self._stop.is_set()
 
     # ---- locating
     def locate(self, step: dict) -> tuple[Match | None, list[str]]:
@@ -184,8 +199,8 @@ class Executor:
         while True:
             obs = observe(before, self.driver.snapshot())
             ok = effect_ok(expect, obs)
-            if (ok and expect) or time.monotonic() >= deadline:
-                return obs, ok
+            if (ok and expect) or time.monotonic() >= deadline or self._stop.is_set():
+                return obs, ok or self._stop.is_set()
             time.sleep(self.poll)
 
     # ---- one step
@@ -310,20 +325,39 @@ class Executor:
     def run(self) -> dict:
         started = _now()
         values = dict(self.plan.get("values") or {})
-        asked_later = {s.get("param") for s in self.plan.get("steps", []) if s.get("action") == "ask"}
-        for name in missing_values(self.plan):
-            if name not in asked_later:
-                values[name] = self.ui.ask_value(name, f"What should “{name}” be for this run?")
+        steps = self.plan.get("steps", [])
         start_state = self.driver.snapshot()
-
         entries, keep = [], True
-        for step in self.plan.get("steps", []):
-            if not keep:
-                entries.append({"step": step["id"], "action": step["action"],
-                                "describe": step.get("describe", ""), "outcome": "not_run"})
-                continue
-            entry, keep = self._run_step(step, values)
-            entries.append(entry)
+        try:
+            asked_later = {s.get("param") for s in steps if s.get("action") == "ask"}
+            for name in missing_values(self.plan):
+                if name not in asked_later and not self._stop.is_set():
+                    values[name] = self.ui.ask_value(name, f"What should “{name}” be for this run?")
+            for step in steps:
+                if keep and self._stop.is_set():
+                    keep = False
+                    entries.append({"step": step["id"], "action": step["action"],
+                                    "describe": step.get("describe", ""), "outcome": "stopped",
+                                    "stopped_by": self.stopped_by})
+                    continue
+                if not keep:
+                    entries.append({"step": step["id"], "action": step["action"],
+                                    "describe": step.get("describe", ""), "outcome": "not_run"})
+                    continue
+                entry, keep = self._run_step(step, values)
+                entries.append(entry)
+        except KeyboardInterrupt:  # ctrl+C in the terminal: stop cleanly and still write the audit
+            self.request_stop("person (ctrl+C)")
+            done_ids = {e["step"] for e in entries}
+            first = True
+            for step in steps:
+                if step["id"] in done_ids:
+                    continue
+                entries.append({"step": step["id"], "action": step["action"], "describe": step.get("describe", ""),
+                                "outcome": "stopped" if first else "not_run",
+                                **({"stopped_by": self.stopped_by} if first else {})})
+                first = False
+            keep = False
 
         try:
             self.driver.close()
@@ -356,6 +390,7 @@ class Executor:
             "entries": entries,
             "result": result,
             "summary": {"outcomes": counts, "human_rejections": rejected},
+            "stopped_by": self.stopped_by,
             "final_state": {
                 "front_app": end_state.get("front_app"),
                 "windows": [w["title"] for w in end_state.get("windows", [])][:10],

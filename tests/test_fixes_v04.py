@@ -86,3 +86,67 @@ def test_ask_and_open_app_validation():
             "author": {"kind": "ai", "name": "A"}}
     errs = validate_plan({**base, "steps": [{"id": 1, "action": "ask"}, {"id": 2, "action": "open_app"}]})
     assert any("ask needs" in e for e in errs) and any("open_app needs app" in e for e in errs)
+
+
+# ---- stopping a run at any time
+
+from tasktrace.appcore import result_summary  # noqa: E402
+from tasktrace.review import triage  # noqa: E402
+
+from test_loop import Q4, RUN  # noqa: E402
+
+
+def _q3_plan():
+    return make_plan(compile_run(RUN, use_ocr=False), Q4)
+
+
+def test_stop_between_steps():
+    plan, drv = _q3_plan(), FakeDriver()
+    holder = {}
+
+    class StopAtThree(ScriptedUI):
+        def confirm(self, step, desc, match):
+            if step["id"] == 3:
+                holder["ex"].request_stop("person")  # e.g. the menu item or ⌃⌥Q, from another thread
+            return "go"
+
+    ex = Executor(plan, drv, StopAtThree(on_handoff=lambda s: None), effect_timeout=0.1, poll=0.01)
+    holder["ex"] = ex
+    audit = ex.run()
+    outcomes = [e["outcome"] for e in audit["entries"]]
+    assert outcomes[:4] == ["ok", "ok", "ok", "stopped"]  # step 3 finishes its keystrokes, then nothing else
+    assert set(outcomes[4:]) == {"not_run"}
+    assert audit["result"] == "stopped" and audit["stopped_by"] == "person"
+    assert "Report title" in drv.fields and "Period end" not in drv.fields
+    rev = triage(audit, plan)
+    assert rev["verdict"] == "stopped"
+    title, body, fix = result_summary(audit, rev)
+    assert title == "Stopped" and "after 3 of 9 steps" in body and not fix
+
+
+def test_stop_interrupts_waiting_for_an_app():
+    import threading
+    import time
+
+    plan, drv = _q3_plan(), FakeDriver(broken={"New Report"})  # step 1's expected window never opens
+    ex = Executor(plan, drv, ScriptedUI(), effect_timeout=30, poll=0.01)
+    threading.Timer(0.3, ex.request_stop).start()
+    t0 = time.monotonic()
+    audit = ex.run()
+    assert time.monotonic() - t0 < 5  # didn't sit out the 30 s wait
+    assert audit["result"] == "stopped" and audit["entries"][1]["outcome"] == "stopped"
+
+
+def test_ctrl_c_in_terminal_still_writes_the_audit(tmp_path):
+    plan, drv = _q3_plan(), FakeDriver()
+
+    class CtrlC(ScriptedUI):
+        def confirm(self, step, desc, match):
+            if step["id"] == 2:
+                raise KeyboardInterrupt
+            return "go"
+
+    audit = Executor(plan, drv, CtrlC(), audit_dir=tmp_path, effect_timeout=0.1, poll=0.01).run()
+    assert audit["stopped_by"] == "person (ctrl+C)"
+    assert [e["outcome"] for e in audit["entries"]][:3] == ["ok", "stopped", "not_run"]
+    assert (tmp_path / f"{audit['audit_id']}.json").exists()
