@@ -2,10 +2,10 @@
 
 ## 0.5.3
 
-- **Fixed: pop-ups ignored every click on first launch** (you had to force-quit). The ⌃⌥Q stop shortcut
-  added in 0.4.1 also watched TaskTrace's own windows, and that swallowed mouse clicks in its pop-ups.
-  It now only listens while you're in other apps and ignores everything but key presses; every pop-up
-  during a run has its own Stop button.
+- **Fixed: pop-ups ignored every click on first launch** (you had to force-quit). The keyboard listener
+  behind the ⌃⌥Q stop shortcut (added in 0.4.1) made TaskTrace's pop-ups ignore mouse clicks on macOS 26,
+  even when it only listened to other apps. The shortcut is gone for runs: stop with **■ Stop the run** in
+  the menu, or the Stop button every step pop-up has. (⌃⌥Q still stops a *recording*.)
 - The build now launches the app fresh with no permissions, clicks through its first pop-ups from outside
   like a real mouse, and refuses to publish if they don't respond.
 
@@ -32,8 +32,8 @@
 
 ## 0.4.1
 
-- **Stop a run at any time**: ⌃⌥Q or "■ Stop the run" in the menu-bar app (it also closes an open step
-  pop-up), or ctrl+C in the terminal. The step in progress finishes its current action, nothing after it
+- **Stop a run at any time**: "■ Stop the run" in the menu-bar app (it also closes an open step
+  pop-up), or ctrl+C in the terminal. (A ⌃⌥Q shortcut was removed in 0.5.3.) The step in progress finishes its current action, nothing after it
   runs, waits for an app to respond are cut short, and the audit records who stopped it.
 - A deliberate stop is reported as "Stopped", not as a failure that needs fixing.
 - **Delete recordings** from the app: "Move to Trash…" under each recorded task. It can be restored from the Trash.

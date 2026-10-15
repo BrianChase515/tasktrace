@@ -20,7 +20,6 @@ from AppKit import (
     NSAlert,
     NSApplication,
     NSBundle,
-    NSEvent,
     NSRunningApplication,
     NSPasteboard,
     NSPasteboardTypeString,
@@ -43,9 +42,6 @@ TITLE_REC = "● REC"
 TITLE_PAUSED = "❚❚ REC"
 TITLE_BUSY = "▶ Running"
 TITLE_STOPPING = "■ Stopping…"
-KEY_DOWN_MASK = 1 << 10  # NSEventMaskKeyDown
-CTRL, OPT, CMD = 1 << 18, 1 << 19, 1 << 20  # NSEventModifierFlag Control / Option / Command
-KEYCODE_Q = 12
 STATE_FILE = ".app-state.json"
 
 
@@ -209,10 +205,9 @@ class TaskTraceApp(rumps.App):
         self.rec = None
         self.busy = False
         self.executor = None
-        # ⌃⌥Q stops a run while you're working in another app. Only a global monitor: a local one
-        # (watching TaskTrace's own windows) swallowed mouse clicks in its pop-ups. Every pop-up during
-        # a run has its own Stop button instead.
-        self._monitors = [NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._hotkey)]
+        # No keyboard shortcut for stopping a run: any NSEvent key monitor (even one that only watches
+        # other apps) made TaskTrace's pop-ups ignore mouse clicks on macOS 26. Stop from the menu or
+        # with the Stop button that every step pop-up has.
         self._runs_sig = None
         self._rebuild()
         self._ticker = rumps.Timer(self._tick, 0.5)
@@ -268,7 +263,7 @@ class TaskTraceApp(rumps.App):
             ]
         elif self.busy:
             items += [
-                rumps.MenuItem("■ Stop the run  (⌃⌥Q from any app)", callback=self.stop_run),
+                rumps.MenuItem("■ Stop the run", callback=self.stop_run),
                 rumps.MenuItem("Running a plan: answer the pop-ups as they appear"),
             ]
         else:
@@ -442,24 +437,6 @@ class TaskTraceApp(rumps.App):
               f"newest version from {REPO_URL}/releases")
 
     # ---- stopping a run
-    @staticmethod
-    def _is_stop_hotkey(event) -> bool:
-        try:
-            if int(event.type()) != 10:  # NSEventTypeKeyDown; never touch anything else
-                return False
-            flags = int(event.modifierFlags())
-            return int(event.keyCode()) == KEYCODE_Q and bool(flags & CTRL) and bool(flags & OPT) and not flags & CMD
-        except Exception:
-            return False
-
-    def _hotkey(self, event) -> None:
-        # While recording, the recorder handles ⌃⌥Q itself. During a run, it stops the run.
-        try:
-            if self.executor is not None and self._is_stop_hotkey(event):
-                self.stop_run(None)
-        except Exception:
-            pass
-
     def stop_run(self, _) -> None:
         ex = self.executor
         if ex is None or ex.stopping:
