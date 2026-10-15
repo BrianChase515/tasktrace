@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0
+
+**A run can now work a form it has never seen.** The first real run showed why a recorded step
+list can't: the next employer's Easy Apply asked different questions, in a different order, over
+a different number of pages, so "type the city into the third field" had nothing to type into.
+
+- **`form_loop`**: one plan step that works a whole multi-page form. On each page it reads what is
+  actually on screen, fills every empty field it has an answer for, presses Continue, and stops
+  when Review or Submit appears. Fields the site already filled are left alone, so your saved
+  resume is kept. If a page stops moving, it hands over instead of pressing forever.
+- **The answer bank** (`answers.json` in your TaskTrace folder): questions you've answered before.
+  Answer "years of experience with CX" once and it is never asked again, however the next employer
+  words it. A question naming a particular employer — "why do you want to work at X" — is always
+  asked, because reusing last week's answer there is worse than not answering. Seed it from your
+  recordings with `tasktrace answers --learn-from <run>`, and see it with `tasktrace answers`.
+- **`pick_list_item`**: choose a row by what it says. "The first job badged High match or Top
+  applicant that has an Easy Apply button", rather than a job title you have to type or a row
+  position that is wrong by tomorrow.
+- **A sound when the run needs you**, so you can look away: one note for a question, another for a
+  problem. `tasktrace replay --quiet` turns it off.
+
 ## 0.6.2
 
 Polish from the second LinkedIn recording:

@@ -95,6 +95,16 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--driver", default="auto", choices=["auto", "macos", "fake"])
     rp.add_argument("--allow-abs", action="store_true", help="allow raw screen coordinates as a last resort")
     rp.add_argument("--audit-dir", help="default: an audits/ folder next to the plan")
+    rp.add_argument("--answers", help="answer bank to use (default: answers.json in your TaskTrace folder)")
+    rp.add_argument("--quiet", action="store_true", help="no sound when the run needs you")
+
+    an = sub.add_parser("answers", help="questions you've already answered, reused by form_loop steps")
+    an.add_argument("--learn-from", metavar="TRACE", action="append", default=[],
+                    help="harvest question/answer pairs from a recording (repeatable)")
+    an.add_argument("--set", action="append", default=[], metavar="QUESTION=ANSWER")
+    an.add_argument("--forget", metavar="QUESTION")
+    an.add_argument("--ask-always", metavar="QUESTION", help="always stop and ask this one")
+    an.add_argument("--path", help="answer bank file (default: answers.json in your TaskTrace folder)")
 
     rv = sub.add_parser("review", help="triage an audit and route each problem")
     rv.add_argument("audit")
@@ -147,7 +157,34 @@ def main(argv: list[str] | None = None) -> int:
             print(revise_prompt(plan, audit, triage(audit, plan), args.who))
         return 0
 
+    if args.cmd == "answers":
+        from .answers import AnswerBank, default_path, normalize
+        bank = AnswerBank(Path(args.path).expanduser() if args.path else default_path(home()))
+        for t in args.learn_from:
+            n = bank.seed_from_trace(_load(str(resolve_trace(t))))
+            print(f"Learned {n} answers from {t}")
+        for pair in args.set:
+            q, _, a = pair.partition("=")
+            bank.learn(q.strip(), a.strip())
+            print(f"Saved: {q.strip()}")
+        if args.ask_always:
+            bank.learn(args.ask_always, "", ask_always=True)
+            print(f"Will always ask: {args.ask_always}")
+        if args.forget:
+            key = normalize(args.forget)
+            before = len(bank.entries)
+            bank.entries = [e for e in bank.entries if e.get("key") != key]
+            bank.save()
+            print(f"Forgot {before - len(bank.entries)} answer(s)")
+        if not (args.learn_from or args.set or args.forget or args.ask_always):
+            for e in bank.entries:
+                flag = "  [always asks]" if e.get("ask_always") else ""
+                print(f"  {e['question']}\n      -> {e.get('answer', '')!r}{flag}")
+            print(f"\n{len(bank.entries)} answers in {bank.path}")
+        return 0
+
     if args.cmd == "replay":
+        from .answers import AnswerBank, default_path
         from .drivers import get_driver
         from .plan import validate_plan
         from .replay import Executor, TerminalUI
@@ -162,8 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Plan {plan['plan_id']} v{plan['version']} by {author.get('name')} ({author.get('kind')}), "
               f"{len(plan['steps'])} steps, mode={args.mode}")
         audit_dir = Path(args.audit_dir) if args.audit_dir else plan_path.parent / "audits"
+        if args.quiet:
+            from . import alert
+            alert.set_enabled(False)
+        bank = AnswerBank(Path(args.answers).expanduser() if args.answers else default_path(home()))
         ex = Executor(plan, get_driver(args.driver), TerminalUI(), mode=args.mode, audit_dir=audit_dir,
-                      allow_abs=args.allow_abs)
+                      allow_abs=args.allow_abs, answers=bank)
         audit = ex.run()
         print(f"\nResult: {audit['result']}  {audit['summary']['outcomes']}")
         print(f"Audit: {audit_dir / (audit['audit_id'] + '.json')}")

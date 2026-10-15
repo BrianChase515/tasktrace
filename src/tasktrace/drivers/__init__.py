@@ -46,6 +46,31 @@ class Driver:
     def act(self, step: dict, match: Match | None, text: str | None = None) -> None:
         raise NotImplementedError
 
+    # ---- reading what is on screen now, rather than what was recorded
+    # A plan written from one recording cannot list the fields of a form it has never seen.
+    # These let the executor work out the current page for itself.
+
+    def read_form(self, step: dict) -> dict:
+        """The form on screen right now.
+
+        {"controls": [{"role", "title", "value", "placeholder", "options", "handle"}],
+         "buttons":  [{"title", "handle"}],
+         "progress": "40 percent" | None}
+        """
+        return {"controls": [], "buttons": [], "progress": None}
+
+    def fill(self, control: dict, value: str) -> bool:
+        """Put a value into one control: type into a field, choose from a menu, set a toggle."""
+        return False
+
+    def press(self, control: dict) -> bool:
+        """Press a button returned by read_form or list_items."""
+        return False
+
+    def list_items(self, step: dict) -> list[dict]:
+        """Rows of the list on screen: [{"index", "text", "controls": [{"role", "title", "handle"}]}]."""
+        return []
+
     def snapshot(self) -> dict:
         """{"front_app": str, "windows": [{"id", "title", "app"}]}"""
         return {"front_app": None, "windows": []}

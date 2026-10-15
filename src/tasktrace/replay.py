@@ -17,13 +17,71 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, alert
+from .answers import AnswerBank, is_essay
 from .drivers import Driver, Match
 from .plan import TARGETED, fill, missing_values, step_label
 
 AUDIT_SCHEMA = "tasktrace-audit/0.1"
 MAX_ATTEMPTS = 3
 POSITIONAL = {"rel_xy", "abs_xy"}
+DEFAULT_ADVANCE = ["Continue to next step", "Next", "Continue"]
+DEFAULT_FINISH = ["Review your application", "Submit application", "Submit", "Review"]
+MAX_PAGES = 12
+FILLABLE = {"AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXPopUpButton",
+            "AXRadioButton", "AXCheckBox", "AXMenuButton"}
+EMPTY_VALUES = {"", "-", "select an option", "please select", "choose an option"}
+
+
+def _param_name(question: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", str(question).lower()).strip("_")[:40] or "answer"
+
+
+def _button(buttons: list, names: list) -> dict | None:
+    """The first button whose name matches one the plan is looking for."""
+    wanted = [n.strip().lower() for n in names]
+    for want in wanted:  # in the order the plan lists them: finishing beats advancing
+        for b in buttons:
+            title = (b.get("title") or "").strip().lower()
+            if title == want or title.startswith(want) or want in title:
+                return b
+    return None
+
+
+def _matches_control(control: dict, spec: dict) -> bool:
+    if spec.get("role") and control.get("role") != spec["role"]:
+        return False
+    prefix = (spec.get("title_prefix") or "").lower()
+    title = (control.get("title") or "").lower()
+    return title.startswith(prefix) if prefix else True
+
+
+def _page_summary(page: dict) -> str:
+    bits = []
+    if page.get("progress"):
+        bits.append(page["progress"])
+    if page["filled"]:
+        bits.append(f"{len(page['filled'])} filled from your saved answers")
+    if page["asked"]:
+        bits.append(f"{len(page['asked'])} you just answered")
+    return "; ".join(bits) or "nothing to fill in"
+
+
+def _needs_answer(control: dict) -> bool:
+    """Is this control still waiting for something?
+
+    A field the site has already filled in (your name, your email) is left alone: the person
+    answered it once, on their profile, and retyping it is how a run breaks a form.
+    """
+    if control.get("role") not in FILLABLE:
+        return False
+    if control.get("role") == "AXSecureTextField":
+        return False
+    value = str(control.get("value") or "").strip().lower()
+    if control.get("role") in ("AXRadioButton", "AXCheckBox"):
+        return value in ("", "0", "false")
+    return value in EMPTY_VALUES
 
 
 def _now() -> str:
@@ -140,10 +198,12 @@ class ScriptedUI:
 
 class Executor:
     def __init__(self, plan: dict, driver: Driver, ui, mode: str = "step", audit_dir: Path | None = None,
-                 effect_timeout: float = 4.0, poll: float = 0.25, allow_abs: bool = False):
+                 effect_timeout: float = 4.0, poll: float = 0.25, allow_abs: bool = False,
+                 answers: AnswerBank | None = None):
         if mode not in ("step", "watch", "dry-run"):
             raise ValueError("mode must be step, watch or dry-run")
         self.plan, self.driver, self.ui, self.mode = plan, driver, ui, mode
+        self.answers = answers if answers is not None else AnswerBank()
         self.audit_dir = Path(audit_dir) if audit_dir else None
         self.effect_timeout, self.poll, self.allow_abs = effect_timeout, poll, allow_abs
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -203,6 +263,127 @@ class Executor:
                 return obs, ok or self._stop.is_set()
             time.sleep(self.poll)
 
+    # ---- working a form that nobody has seen before
+    def _answer_control(self, control: dict, page: dict) -> str:
+        """Fill one control from the bank, or stop and ask the person — once, ever."""
+        question = control.get("title") or control.get("placeholder") or ""
+        hit = self.answers.find(question, control.get("role"))
+        if hit:
+            self.answers.used(hit)
+            if self.driver.fill(control, hit["answer"]):
+                page["filled"].append({"question": question, "answer": hit["answer"], "from": "bank"})
+                return "filled"
+            page["problems"].append({"question": question, "problem": "could not fill"})
+            return "failed"
+        if self.mode == "dry-run":
+            page["would_ask"].append(question)
+            return "would_ask"
+        # Something this person has not answered before: their call, and worth interrupting for.
+        alert.attention("ask")
+        alert.say("Question for you")
+        answer = self.ui.ask_value(_param_name(question), question, control.get("options") or None)
+        if not answer:
+            page["problems"].append({"question": question, "problem": "unanswered"})
+            return "unanswered"
+        self.answers.learn(question, answer, control.get("role"), control.get("options"))
+        self.driver.fill(control, answer)
+        page["asked"].append({"question": question, "answer": answer,
+                              "reusable": not is_essay(question, answer)})
+        return "asked"
+
+    def _form_loop(self, step: dict, entry: dict, finish, hand_to_human):
+        """Work through however many pages this form turns out to have.
+
+        A recorded step list cannot do this: the next employer's form has different fields in a
+        different order over a different number of pages. So the executor reads the page in front
+        of it, fills what it has an answer for, asks about what it doesn't, and advances.
+        """
+        advance = step.get("advance") or DEFAULT_ADVANCE
+        done_on = step.get("finish") or DEFAULT_FINISH
+        pages, seen_progress = [], []
+        for n in range(1, int(step.get("max_pages") or MAX_PAGES) + 1):
+            if self._stop.is_set():
+                entry["pages"] = pages
+                return finish("stopped", False)
+            form = self.driver.read_form(step)
+            page = {"page": n, "progress": form.get("progress"), "filled": [], "asked": [],
+                    "problems": [], "would_ask": []}
+            for control in form.get("controls", []):
+                if not _needs_answer(control):
+                    continue
+                outcome = self._answer_control(control, page)
+                if outcome == "unanswered":
+                    pages.append(page)
+                    entry["pages"] = pages
+                    return hand_to_human("a question needs your answer")
+            pages.append(page)
+            buttons = form.get("buttons", [])
+            if _button(buttons, done_on):
+                entry["pages"] = pages
+                entry["ended_on"] = _button(buttons, done_on)["title"]
+                return finish("form_complete", True)
+            nxt = _button(buttons, advance)
+            if nxt is None:
+                entry["pages"] = pages
+                return hand_to_human("no button to continue with, and nothing that finishes the form")
+            if self.mode == "dry-run":
+                entry["pages"] = pages
+                return finish("would_run", True)
+            if self.mode == "step":
+                ans = self.ui.confirm(step, f'Page {n}: {_page_summary(page)} -> press "{nxt["title"]}"', None)
+                if ans == "stop":
+                    entry["pages"] = pages
+                    return finish("stopped", False)
+                if ans == "manual":
+                    return hand_to_human("you chose to do this page")
+            self.driver.press(nxt)
+            time.sleep(max(self.poll, 0.4))
+            after = self.driver.read_form(step).get("progress")
+            page["progress_after"] = after
+            if after and after == page.get("progress") and after in seen_progress:
+                entry["pages"] = pages  # pressing is not getting us anywhere
+                return hand_to_human(f"the form stopped moving at {after}")
+            seen_progress.append(page.get("progress"))
+        entry["pages"] = pages
+        return hand_to_human(f"still going after {len(pages)} pages")
+
+    def _pick_list_item(self, step: dict, values: dict, entry: dict, finish, hand_to_human):
+        """Choose a row by what it says, not by where it sat the day it was recorded."""
+        want = [w.lower() for w in (step.get("require_any") or [])]
+        avoid = [w.lower() for w in (step.get("exclude_any") or [])]
+        press = step.get("press") or {}
+        items = self.driver.list_items(step)
+        entry["scanned"] = len(items)
+        matches = []
+        for item in items:
+            text = (item.get("text") or "").lower()
+            if avoid and any(w in text for w in avoid):
+                continue
+            if want and not any(w in text for w in want):
+                continue
+            control = next((c for c in item.get("controls", [])
+                            if _matches_control(c, press)), None)
+            if control is not None:
+                matches.append((item, control))
+        entry["matched"] = [{"index": i["index"], "text": (i.get("text") or "")[:200]} for i, _ in matches[:5]]
+        if not matches:
+            return hand_to_human(f"nothing in the list matching {', '.join(step.get('require_any') or []) or 'the plan'}")
+        if self.mode == "dry-run":
+            return finish("would_run", True)
+        item, control = matches[0]
+        values[step["param"]] = item.get("text", "")[:200] if step.get("param") else None
+        if self.mode == "step" or step.get("consequential"):
+            ans = self.ui.confirm(step, f'Open: {(item.get("text") or "")[:160]}', None)
+            if ans == "stop":
+                return finish("stopped", False)
+            if ans == "skip":
+                return finish("skipped", True)
+        before = self.driver.snapshot()
+        self.driver.press(control)
+        self._wait_effect(before, step.get("expect"))
+        entry["chose"] = {"index": item["index"], "text": (item.get("text") or "")[:200]}
+        return finish("ok", True)
+
     # ---- one step
     def _run_step(self, step: dict, values: dict) -> tuple[dict, bool]:
         """Returns (audit entry, keep_going)."""
@@ -225,15 +406,23 @@ class Executor:
         def hand_to_human(reason: str) -> tuple[dict, bool]:
             if self.mode == "dry-run":
                 return finish("would_hand_to_human", True)
+            alert.attention("problem")
             ans = self.ui.handoff(step, reason)
             entry["handoff"] = reason
             if ans == "stop":
                 return finish("stopped", False)
             return finish("skipped" if ans == "skip" else "handed_to_human", True)
 
+        if step["action"] == "form_loop":
+            return self._form_loop(step, entry, finish, hand_to_human)
+
+        if step["action"] == "pick_list_item":
+            return self._pick_list_item(step, values, entry, finish, hand_to_human)
+
         if step["action"] == "ask":
             if self.mode == "dry-run":
                 return finish("would_ask", True)
+            alert.attention("ask")
             answer = self.ui.ask_value(step["param"], step.get("question"), step.get("options"))
             values[step["param"]] = answer
             entry["question"] = step.get("question")

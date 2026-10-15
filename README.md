@@ -179,6 +179,7 @@ Permissions apply to the app that runs Python (Terminal, iTerm, VS Code). Restar
 | `tasktrace outline <run>` | Print parameters and the step outline |
 | `tasktrace diff <runA> <runB> [--write]` | Learn variables vs constants from two runs |
 | `tasktrace list` | List runs |
+| `tasktrace answers [--learn-from <run>]` | Questions you've already answered, reused by `form_loop` steps |
 | `tasktrace mcp` | Serve traces to MCP clients |
 | `tasktrace app` | Start the menu-bar app from your Python install |
 
@@ -258,6 +259,34 @@ sends, deletes, pays or creates, and for any target found only by position. A ty
 never means "go". Raw screen coordinates are off unless you pass `--allow-abs`. `--mode dry-run` checks
 that every target can be found without touching anything. If an expected window doesn't appear, the run
 stops instead of guessing.
+
+**Forms nobody has seen yet.** Some tasks are the same task every time but never the same form:
+every employer's application, every vendor's onboarding. A recorded step list cannot survive that, so a
+plan can carry two steps that read the screen instead of repeating it:
+
+```json
+{"id": 1, "action": "pick_list_item", "require_any": ["High match", "Top applicant"],
+ "exclude_any": ["Applied"], "press": {"role": "AXButton", "title_prefix": "Easy Apply"}}
+{"id": 2, "action": "form_loop", "advance": ["Continue to next step"],
+ "finish": ["Review your application", "Submit application"]}
+```
+
+`pick_list_item` chooses a row by what it says, not by where it sat when you recorded.
+`form_loop` works a whole multi-page form: on each page it fills every empty field it has an answer
+for, presses Continue, and stops when Review or Submit appears — however many pages that takes.
+
+Answers come from **the answer bank**, `answers.json` in your TaskTrace folder:
+
+```bash
+tasktrace answers --learn-from q3-report   # harvest what you already filled in, from a recording
+tasktrace answers                          # see what it knows
+tasktrace answers --ask-always "Why do you want to work here?"
+```
+
+Answer a question once and it is never asked again, however the next form words it. A question that
+names a particular company, or wants prose about one, is always put back to you — reusing last
+week's answer there is worse than not answering. Anything new stops the run, **plays a sound**, asks
+you, and remembers what you said. Fields the site already filled in are left alone.
 
 **Asking instead of guessing.** A plan can include an `ask` step where the author wasn't sure:
 

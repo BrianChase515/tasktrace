@@ -115,6 +115,53 @@ class FakeDriver(Driver):
             if keys == "cmd+s":
                 self.saved = True
 
+    # ---- a simulated multi-page application form, for exercising form_loop
+    def load_form(self, pages: list[list[dict]], advance: str = "Continue to next step",
+                  finish: str = "Submit application") -> None:
+        """pages[i] = [{"role", "title", "value", "options"}]: what page i asks for."""
+        self.form_pages = [[dict(c) for c in page] for page in pages]
+        self.page = 0
+        self.advance_label, self.finish_label = advance, finish
+        self.pressed: list[str] = []
+
+    def load_list(self, items: list[dict]) -> None:
+        """items = [{"text", "button"}]: rows with a button to press."""
+        self.list_rows = [dict(i) for i in items]
+        self.clicked_row: dict | None = None
+
+    def read_form(self, step):
+        pages = getattr(self, "form_pages", None)
+        if not pages or self.page >= len(pages):
+            return {"controls": [], "buttons": [], "progress": None}
+        controls = [{**c, "handle": (self.page, i)} for i, c in enumerate(pages[self.page])]
+        last = self.page == len(pages) - 1
+        label = self.finish_label if last else self.advance_label
+        return {"controls": controls, "buttons": [{"title": label, "handle": ("btn", self.page)}],
+                "progress": f"{int(100 * self.page / max(1, len(pages) - 1))} percent"}
+
+    def fill(self, control, value):
+        page, i = control["handle"]
+        self.form_pages[page][i]["value"] = value
+        self.log.append(f"fill {control.get('title')!r} = {value!r}")
+        return True
+
+    def press(self, control):
+        handle = control.get("handle")
+        if isinstance(handle, tuple) and handle[0] == "btn":
+            self.pressed.append(control["title"])
+            if control["title"] != self.finish_label:
+                self.page += 1
+            return True
+        row = next((r for r in getattr(self, "list_rows", []) if r.get("button") == control.get("title")), None)
+        self.clicked_row = row
+        self.log.append(f"press {control.get('title')!r}")
+        return True
+
+    def list_items(self, step):
+        return [{"index": i, "text": r["text"],
+                 "controls": [{"role": "AXButton", "title": r["button"], "handle": ("row", i)}]}
+                for i, r in enumerate(getattr(self, "list_rows", []))]
+
     def human_types(self, field: str, value: str) -> None:
         """What a person does when the executor hands a secret step to them."""
         self.fields[field] = value

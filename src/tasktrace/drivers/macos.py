@@ -21,12 +21,14 @@ from ApplicationServices import (
     AXUIElementSetAttributeValue,
 )
 
-from .. import ocr
+from .. import axcontext, ocr
 from ..compile import SPECIAL_KEYS
 from ..recorder_macos import (
     _ax,
     _ax_frame,
     _ax_str,
+    _dialogish,
+    _snapshot,
     _window_list,
     enable_app_accessibility,
     restore_app_accessibility,
@@ -48,6 +50,76 @@ MAX_NODES = 4000
 
 def _post(ev) -> None:
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+
+
+def _is_secure_el(el) -> bool:
+    return "AXSecureTextField" in (_ax_str(el, "AXSubrole"), _ax_str(el, "AXRole"))
+
+
+def _own_label(el) -> str:
+    for attr in ("AXTitle", "AXDescription", "AXPlaceholderValue", "AXHelp"):
+        v = _ax_str(el, attr, 200)
+        if v:
+            return v
+    tui = _ax(el, "AXTitleUIElement")  # a field labelled by the text beside it
+    if tui is not None:
+        return _ax_str(tui, "AXValue", 200) or _ax_str(tui, "AXTitle", 200) or ""
+    return ""
+
+
+def _fieldset_label(el, depth: int = 5) -> str:
+    """The question a group of radio buttons belongs to."""
+    cur = _ax(el, "AXParent")
+    for _ in range(depth):
+        if cur is None:
+            break
+        if _ax_str(cur, "AXSubrole") == "AXFieldset" or _ax_str(cur, "AXRole") in ("AXRadioGroup", "AXGroup"):
+            label = _ax_str(cur, "AXTitle", 200) or _ax_str(cur, "AXDescription", 200)
+            if label and len(label) > 12:
+                return label
+        cur = _ax(cur, "AXParent")
+    return ""
+
+
+def _label_of(el) -> str:
+    """What this control is called, from whichever attribute the app bothered to set.
+
+    A radio button is usually called "Yes". On its own that is not a question, and an answer
+    stored against it would tick "Yes" in an unrelated form, so it is qualified with the
+    question it sits under: "Do you require sponsorship... — Yes".
+    """
+    own = _own_label(el)
+    if _ax_str(el, "AXRole") in ("AXRadioButton", "AXCheckBox", "AXSwitch"):
+        group = _fieldset_label(el)
+        if group and group.lower() not in own.lower():
+            return f"{group} — {own}" if own else group
+    return own
+
+
+def _menu_items(el) -> list:
+    menu = next((c for c in (_ax(el, "AXChildren") or []) if _ax_str(c, "AXRole") == "AXMenu"), None)
+    return list(_ax(menu, "AXChildren") or []) if menu is not None else []
+
+
+def _menu_options(el) -> list[str]:
+    """The choices in a dropdown, without opening it where the app will tell us."""
+    out = []
+    for item in _menu_items(el):
+        t = _ax_str(item, "AXTitle", 120)
+        if t:
+            out.append(t)
+    return out[:40]
+
+
+def _descend(el, limit: int = 400):
+    """Every element inside this one, breadth-first and bounded."""
+    queue, seen = deque([el]), 0
+    while queue and seen < limit:
+        cur = queue.popleft()
+        seen += 1
+        yield cur
+        for child in _ax(cur, "AXChildren") or []:
+            queue.append(child)
 
 
 class MacDriver(Driver):
@@ -245,6 +317,125 @@ class MacDriver(Driver):
                 _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (match.x, match.y), 0))
             _post(Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 2,
                                                         int(sc.get("dy", 0)), int(sc.get("dx", 0))))
+
+    # ---- reading the page as it is now
+    def _form_root(self, step):
+        """The panel being filled in, if there is one, else the window.
+
+        Reading controls from a whole browser window drags in the site's navigation; a form is
+        a panel inside it, and on a wizard that panel is the one carrying the progress indicator.
+        """
+        win = self._window_el(step)
+        if win is None:
+            return None
+        bounds = self.window_bounds(step)
+        best, queue, seen = None, deque([win]), 0
+        while queue and seen < MAX_NODES:
+            el = queue.popleft()
+            seen += 1
+            role = _ax_str(el, "AXRole")
+            if role in ("AXGroup", "AXScrollArea", "AXSheet") and _dialogish(el, role, bounds):
+                best = el  # keep descending: the innermost panel wins
+            for child in _ax(el, "AXChildren") or []:
+                queue.append(child)
+        return best or win
+
+    def read_form(self, step):
+        root = self._form_root(step)
+        if root is None:
+            return {"controls": [], "buttons": [], "progress": None}
+        controls, buttons, handles = [], [], {}
+        queue, seen = deque([(root, 0)]), 0
+        while queue and seen < MAX_NODES:
+            el, depth = queue.popleft()
+            seen += 1
+            role = _ax_str(el, "AXRole")
+            if role in axcontext.INTERACTIVE_ROLES or _is_secure_el(el):
+                item = {"role": "AXSecureTextField" if _is_secure_el(el) else role,
+                        "title": _label_of(el), "handle": el}
+                if not _is_secure_el(el):
+                    item["value"] = _ax_str(el, "AXValue", 200) or ""
+                item["placeholder"] = _ax_str(el, "AXPlaceholderValue") or ""
+                if role in ("AXPopUpButton", "AXComboBox", "AXMenuButton"):
+                    item["options"] = _menu_options(el)
+                if item["title"] or item["placeholder"]:
+                    (buttons if role in ("AXButton", "AXLink") else controls).append(item)
+                    handles[id(el)] = el
+            for child in _ax(el, "AXChildren") or []:
+                queue.append((child, depth + 1))
+        progress = (axcontext.progress_strings(_snapshot(root, max_nodes=400, depth=12)) or [None])[0]
+        return {"controls": controls, "buttons": buttons, "progress": progress}
+
+    def fill(self, control, value):
+        el, role = control.get("handle"), control.get("role")
+        if el is None:
+            return False
+        if role in ("AXCheckBox", "AXRadioButton", "AXSwitch", "AXToggle"):
+            want = str(value).strip().lower() in ("1", "true", "yes", "on", "checked")
+            if (str(_ax_str(el, "AXValue") or "0") in ("1", "true")) != want:
+                AXUIElementPerformAction(el, "AXPress")
+            return True
+        if role in ("AXPopUpButton", "AXMenuButton"):
+            if AXUIElementPerformAction(el, "AXPress") != 0:
+                return False
+            time.sleep(0.35)
+            for item in _menu_items(el):
+                if _ax_str(item, "AXTitle", 200) == str(value):
+                    return AXUIElementPerformAction(item, "AXPress") == 0
+            self._key("escape")
+            return False
+        # Text and combo boxes: type it, because setting the value directly often leaves a web
+        # app's own state untouched, and the page then behaves as if the field were empty.
+        AXUIElementSetAttributeValue(el, "AXFocused", True)
+        time.sleep(0.15)
+        current = _ax_str(el, "AXValue", 200) or ""
+        if current:
+            self._key("cmd+a")
+        self._type(str(value))
+        time.sleep(0.2)
+        return True
+
+    def press(self, control):
+        el = control.get("handle")
+        if el is None:
+            return False
+        if AXUIElementPerformAction(el, "AXPress") == 0:
+            return True
+        frame = _ax_frame(el)
+        if not frame:
+            return False
+        self._click(frame[0] + frame[2] // 2, frame[1] + frame[3] // 2)
+        return True
+
+    def list_items(self, step):
+        win = self._window_el(step)
+        if win is None:
+            return []
+        lists, queue, seen = [], deque([win]), 0
+        while queue and seen < MAX_NODES:
+            el = queue.popleft()
+            seen += 1
+            if _ax_str(el, "AXRole") in axcontext.LIST_ROLES:
+                lists.append(el)
+                continue  # rows come from this list, not from lists nested inside it
+            for child in _ax(el, "AXChildren") or []:
+                queue.append(child)
+        if not lists:
+            return []
+        biggest = max(lists, key=lambda el: len(_ax(el, "AXChildren") or []))
+        out = []
+        for i, row in enumerate(list(_ax(biggest, "AXChildren") or [])[:60]):
+            node = _snapshot(row, max_nodes=120, depth=7)
+            if not node:
+                continue
+            controls = []
+            for el in _descend(row, 400):
+                role = _ax_str(el, "AXRole")
+                if role in ("AXButton", "AXLink"):
+                    controls.append({"role": role, "title": _label_of(el), "handle": el})
+            out.append({"index": i, "text": axcontext.text_summary(node), "controls": controls,
+                        "handle": row})
+        return out
 
     # ---- observing
     def snapshot(self):

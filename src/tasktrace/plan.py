@@ -20,7 +20,11 @@ from .compile import element_label
 PLAN_SCHEMA = "tasktrace-plan/0.1"
 CLICKS = {"click", "double_click", "triple_click", "right_click", "drag"}
 TARGETED = CLICKS | {"type", "scroll"}
-ACTIONS = TARGETED | {"key", "hotkey", "open_app", "ask"}
+# form_loop and pick_list_item are not recorded actions: they are what an author writes when the
+# page cannot be known in advance. form_loop reads each page of a form and fills it from the
+# answer bank, asking about anything new; pick_list_item chooses a row by what it says.
+ACTIONS = TARGETED | {"key", "hotkey", "open_app", "ask", "form_loop", "pick_list_item"}
+LIVE = {"form_loop", "pick_list_item"}
 
 # Buttons whose label suggests the step changes something that's hard to undo.
 CONSEQUENTIAL = re.compile(
@@ -149,6 +153,12 @@ def validate_plan(plan: dict) -> list[str]:
             errs.append(f"step {s.get('id')}: ask needs a question and a param to store the answer in")
         if a in CLICKS and not (s.get("target") or {}):
             errs.append(f"step {s.get('id')}: {a} needs a target")
+        if a == "pick_list_item" and not (s.get("require_any") or s.get("press")):
+            errs.append(f"step {s.get('id')}: pick_list_item needs require_any (what the row must say) "
+                        "and/or press (the control to press in it)")
+        if a == "form_loop" and not (s.get("finish") or s.get("advance")):
+            errs.append(f"step {s.get('id')}: form_loop needs finish (the button that ends the form) "
+                        "or advance (the button that moves to the next page)")
         if a in ("key", "hotkey") and not s.get("keys"):
             errs.append(f"step {s.get('id')}: {a} needs keys")
         if a == "type" and not s.get("secret") and "text" not in s:

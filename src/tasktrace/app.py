@@ -636,8 +636,14 @@ class TaskTraceApp(rumps.App):
                 def prepare(self, step):  # activating apps is main-thread work
                     on_main(MacDriver.prepare, self, step)
 
+            from .answers import AnswerBank, default_path
+            from .paths import home
+
             audit_dir = plan_path.parent / "audits"
-            ex = Executor(plan, AppDriver(), None, mode=mode, audit_dir=audit_dir)
+            # The answer bank is the person's own file: questions they have answered before,
+            # so a form_loop step only interrupts for something genuinely new.
+            ex = Executor(plan, AppDriver(), None, mode=mode, audit_dir=audit_dir,
+                          answers=AnswerBank(default_path(home())))
             ex.ui = DialogUI(stopping=lambda: ex.stopping)
             self.executor = ex
             audit = ex.run()
