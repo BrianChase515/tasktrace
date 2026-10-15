@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+
+- First build signed with the TaskTrace certificate: from here on, updates keep your permissions.
+
 ## 0.5.1
 
 - **In-app updates**: "Check for updates…" in the menu, plus a quiet check at launch and every 6 hours
