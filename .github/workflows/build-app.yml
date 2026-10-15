@@ -55,6 +55,18 @@ jobs:
       - name: Self-test
         run: packaging/dist/TaskTrace.app/Contents/MacOS/TaskTrace --self-test 2>&1 | tee -a build.log
 
+      - name: Allow the dialog check to click (on this build machine only)
+        run: |
+          # The check posts real mouse clicks. On a person's Mac that needs their OK; here we grant it
+          # in the build machine's permission database so a normally-launched TaskTrace can be tested.
+          NOW=$(date +%s)
+          for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            for SVC in kTCCServiceAccessibility kTCCServicePostEvent kTCCServiceListenEvent kTCCServiceScreenCapture; do
+              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SVC','io.github.brianchase515.tasktrace',0,2,4,1,0,$NOW);" 2>&1 | tee -a build.log || true
+            done
+          done
+          sudo killall tccd 2>/dev/null || true
+
       - name: Dialog check (click every button like a person)
         run: |
           mkdir -p shots
@@ -69,11 +81,14 @@ jobs:
           cat uicheck-direct.json | tee -a build.log
           kill $SHOOTER || true
           ( cd shots && zip -q ../dialog-screens.zip *.png ) || true
+          gh release delete diagnostics --yes --cleanup-tag || true
+          gh release create diagnostics dialog-screens.zip uicheck-open.json uicheck-direct.json --prerelease \
+            --target "$GITHUB_SHA" --title "Build diagnostics" --notes "Screenshots and results from the dialog check." || true
           python - <<'PY'
           import json, sys
           runs = [json.load(open(f)) for f in ("uicheck-open.json", "uicheck-direct.json")]
           usable = [r for r in runs if r.get("can_post_clicks")]
-          print("runs where the test could click:", len(usable))
+          print("runs where the test could click:", len(usable), "| normal launch could click:", runs[0].get("can_post_clicks"))
           sys.exit(0 if usable and all(r.get("current_code_ok") for r in usable) else 1)
           PY
 
