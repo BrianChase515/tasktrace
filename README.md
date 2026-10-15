@@ -286,7 +286,7 @@ mouse and keyboard. Step mode's per-step approval makes that conversation easier
 
 Every push to `main` builds `TaskTrace.app`, signs it, and runs checks on a real Mac before publishing:
 a self-test, a dialog check that clicks every button the way a person would (launched normally and
-directly), and an update check that installs the new build over itself and makes sure a build signed
+directly, repeating the timing-sensitive cases), and an update check that installs the new build over itself and makes sure a build signed
 by someone else, or a corrupted download, is refused. Only then is it published as the `latest`
 release with `latest.json`, which the in-app updater reads.
 

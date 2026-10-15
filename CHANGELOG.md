@@ -3,6 +3,8 @@
 ## 0.5.2
 
 - First build signed with the TaskTrace certificate: from here on, updates keep your permissions.
+- Pop-ups: the build's click test caught a pop-up ignoring clicks when another app was in front. Went back
+  to the bring-to-front call that passed every test on macOS 26, and dropped the app-mode switching.
 
 ## 0.5.1
 

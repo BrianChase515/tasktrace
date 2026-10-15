@@ -131,17 +131,19 @@ def run_all(out_path: str) -> None:
     scen("old: first dialog", lambda: legacy_alert("Welcome", "", ("Got it",)), "Got it")
     scen("old: next dialog", lambda: legacy_alert("TaskTrace needs your OK", "", ("Set up", "Not now")),
          "Not now")
-    _bring_other_app_forward()
-    scen("old: another app in front", lambda: legacy_alert("Step 3", "", ("Run it", "Stop")), "Run it")
+    for n in (1, 2, 3):  # this one depends on timing, so try it several times
+        _bring_other_app_forward()
+        scen(f"old: another app in front #{n}", lambda: legacy_alert("Step 3", "", ("Run it", "Stop")), "Run it")
 
     # Current code, same situations.
     scen("new: first dialog", lambda: alert("Welcome", "", ("Got it",))[0], "Got it")
     scen("new: next dialog", lambda: alert("TaskTrace needs your OK", "", ("Set up", "Not now"))[0], "Not now")
     scen("new: dialog with a text box", lambda: alert("Record a task", "", ("Start recording", "Cancel"),
                                                       field="")[0], "Start recording")
-    _bring_other_app_forward()
-    scen("new: another app in front", lambda: alert("Step 3", "", ("Run it", "Stop"))[0], "Run it")
-    scen("new: next dialog after that", lambda: alert("Step 4", "", ("Run it", "Stop"))[0], "Stop")
+    for n in (1, 2, 3):
+        _bring_other_app_forward()
+        scen(f"new: another app in front #{n}", lambda: alert("Step 3", "", ("Run it", "Stop"))[0], "Run it")
+        scen(f"new: next dialog after that #{n}", lambda: alert("Step 4", "", ("Run it", "Stop"))[0], "Stop")
 
     from ApplicationServices import AXIsProcessTrusted
     pre_post = getattr(Quartz, "CGPreflightPostEventAccess", None)
@@ -157,7 +159,7 @@ def run_all(out_path: str) -> None:
 
 def main(out_path: str) -> None:
     def watchdog():
-        time.sleep(150)
+        time.sleep(300)
         with open(out_path, "w") as f:
             json.dump({"error": "timed out"}, f)
         os._exit(2)

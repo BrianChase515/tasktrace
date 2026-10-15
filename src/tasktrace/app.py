@@ -21,6 +21,7 @@ from AppKit import (
     NSApplication,
     NSBundle,
     NSEvent,
+    NSRunningApplication,
     NSPasteboard,
     NSPasteboardTypeString,
     NSTextField,
@@ -72,33 +73,33 @@ def on_main(fn, *args, **kwargs):
     return box["value"]
 
 
-_POLICY_REGULAR = 0    # NSApplicationActivationPolicyRegular
-_POLICY_ACCESSORY = 1  # NSApplicationActivationPolicyAccessory
 _MODAL_LEVEL = 8       # NSModalPanelWindowLevel
 _ALL_SPACES = (1 << 0) | (1 << 8)  # show on every Space, including over full-screen apps
 
 
 def _activate(app) -> None:
-    """Bring TaskTrace forward. macOS 14+ ignores activateIgnoringOtherApps:, so use activate there."""
+    """Bring TaskTrace forward so its pop-up takes the first click.
+
+    Tested on macOS 26 by clicking real pop-ups: the older activateIgnoringOtherApps: still brings a
+    menu-bar app forward when another app is in front; the newer cooperative activate() often doesn't,
+    and then the pop-up ignores clicks. Use the older call, plus NSRunningApplication's for good measure."""
+    app.activateIgnoringOtherApps_(True)
     try:
-        app.activate()
-    except AttributeError:  # macOS 13
-        app.activateIgnoringOtherApps_(True)
+        NSRunningApplication.currentApplication().activateWithOptions_(1 << 1)  # ignoring other apps
+    except Exception:
+        pass
 
 
 def alert(title: str, text: str = "", buttons=("OK",), field: str | None = None,
           placeholder: str = "") -> tuple[int, str | None]:
     """A native dialog. Returns (index of the button clicked, text typed if there was a field).
 
-    A menu-bar-only app (LSUIElement) has no normal activation, so its alert window isn't made
-    key automatically and the buttons swallow the first clicks. We switch the app to a regular
-    activation policy for the life of the dialog and force its window to the front and key, so
-    the first click lands, then switch back.
+    A menu-bar-only app isn't brought forward automatically, and on recent macOS a pop-up from an
+    app that isn't in front can ignore clicks. So bring TaskTrace forward first, keep the pop-up
+    above other windows and on every Space, and don't hide the app afterwards (hiding made the
+    next pop-up start in the background).
     """
     app = NSApplication.sharedApplication()
-    prev_policy = app.activationPolicy()
-    if prev_policy != _POLICY_REGULAR:
-        app.setActivationPolicy_(_POLICY_REGULAR)
     _activate(app)
     a = NSAlert.alloc().init()
     a.setMessageText_(title)
@@ -118,11 +119,7 @@ def alert(title: str, text: str = "", buttons=("OK",), field: str | None = None,
     win.center()
     win.makeKeyAndOrderFront_(None)
     win.orderFrontRegardless()
-    try:
-        choice = int(a.runModal()) - 1000  # NSAlertFirstButtonReturn == 1000
-    finally:
-        if prev_policy != _POLICY_REGULAR:
-            app.setActivationPolicy_(prev_policy)
+    choice = int(a.runModal()) - 1000  # NSAlertFirstButtonReturn == 1000
     if choice < 0:  # dismissed by the stop hotkey: treat as the last button, which is always the safe one
         choice = len(buttons) - 1
     typed = str(tf.stringValue()) if tf is not None else None
