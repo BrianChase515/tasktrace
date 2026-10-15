@@ -38,6 +38,46 @@ ROLE_WORDS = {
 }
 VERBS = {"click": "Click", "double_click": "Double-click", "triple_click": "Triple-click",
          "right_click": "Right-click"}
+TOGGLE_WORDS = {"1": "checked", "0": "unchecked", "true": "checked", "false": "unchecked"}
+
+
+def _toggle_word(v) -> str:
+    return TOGGLE_WORDS.get(str(v).strip().lower(), str(v))
+
+SYNTHESIS_GUIDANCE = (
+    "This is ground-truth telemetry from one human demonstration of a task on macOS, captured "
+    "through the accessibility API. You are a TRACE-TO-CODE COMPILER, not a playback bot: your job "
+    "is to write a standalone, generalized automation script for this task, not to repeat these "
+    "exact clicks. Clicking the recorded positions on a live app will click the wrong rows, repeat "
+    "the person's detours, and break the first time a form has a different number of pages. "
+    "(1) Read `outline` first, then `steps`, and infer the SEMANTIC WORKFLOW: what the person was "
+    "trying to achieve at each stage, not the literal input sequence. "
+    "(2) PRUNE. Drop exploratory detours (opening something, finding nothing useful, backing out) "
+    "and accidental repeats: clicks less than 1000 ms apart on the same element or container where "
+    "the first produced no `effect`. A step with no `effect` that is immediately undone is noise. "
+    "(3) GENERALIZE. Treat the strings in `target.element.title`, `target.path` and "
+    "`container_context` as one instance, not as constants. Match on stable prefixes, roles and "
+    "accessible names (e.g. a button whose name starts with \"Easy Apply\"), never on a row index, "
+    "a pixel position or a full path copied verbatim. Use `parameters` for every value that varies; "
+    "steps marked `secret` were typed into password fields and never recorded, so your script must "
+    "prompt for them. "
+    "(4) WRITE REAL CONTROL FLOW. `container_context.list_item_index` / `total_items` mean the "
+    "person acted on one row of a list: emit a `for` loop over the rows with a predicate drawn from "
+    "`item_text_summary`, not a click on that index. Repeated state-advancing clicks (the same "
+    "\"Next\"/\"Continue\" button while `effect.progress` moves 0% -> 20% -> 40%) mean a `while` "
+    "loop: at each turn read the visible form, fill the required fields, press the advance button, "
+    "and stop at the terminal action (e.g. \"Submit application\") or when progress stops changing. "
+    "`container_context.interactive_siblings` is the form schema of that page, including fields the "
+    "person never had to touch, so your script can handle pages that ask for more than this run did. "
+    "(5) VERIFY, DON'T ASSUME. After each action, check the corresponding `effect` "
+    "(windows opened/closed/retitled, `dialog_opened`, `toggled`, `progress`) before continuing, and "
+    "fail loudly rather than guessing. `settle_ms` is roughly how long the app took to respond. "
+    "(6) `intent` is the person's own explanation of why a step happens; it outranks your inference. "
+    "The task is done when `success_criteria` holds. Steps marked `optional` did not happen in every run. "
+    "Locators, in order of robustness: target.element (role + title/description, scoped by "
+    "target.path and the step's window), then target.ocr_label, then target.rel_xy "
+    "(fraction of the window), and target.abs_xy only as a last resort."
+)
 
 REPLAY_GUIDANCE = (
     "This is a recorded demonstration of a task on macOS. To replicate it: "
@@ -191,7 +231,8 @@ def build_steps(events: list[dict]) -> list[dict]:
             if down is None:
                 continue
             base = {"t_start": down["t"], "t_end": t, "ctx": down.get("ctx"), "x": down["x"], "y": down["y"],
-                    "crop": down.get("crop"), "mods": down.get("mods") or []}
+                    "crop": down.get("crop"), "crop_rect": down.get("crop_rect"),
+                    "ref": down.get("ref"), "mods": down.get("mods") or []}
             if ((ev["x"] - down["x"]) ** 2 + (ev["y"] - down["y"]) ** 2) ** 0.5 > DRAG_PX:
                 b.add({**base, "action": "drag", "to": [ev["x"], ev["y"]]})
                 continue
@@ -253,8 +294,22 @@ def build_steps(events: list[dict]) -> list[dict]:
 
 # --------------------------------------------------------------------------- effects
 
+def attach_containers(steps: list[dict], events: list[dict]) -> None:
+    """Match each click to the description of the list row or modal it happened inside.
+
+    The recorder walks the container tree on a worker thread and emits it separately, keyed to
+    the click by `ref`, so a slow accessibility tree can never stall the event tap.
+    """
+    by_ref = {e["ref"]: e["context"] for e in events
+              if e.get("type") == "container" and e.get("ref") is not None and e.get("context")}
+    for s in steps:
+        ctx = by_ref.get(s.get("ref"))
+        if ctx:
+            s["container"] = ctx
+
+
 def attach_effects(steps: list[dict], events: list[dict]) -> None:
-    changes = [e for e in events if e.get("type") in ("window", "app")]
+    changes = [e for e in events if e.get("type") in ("window", "app", "ui")]
     keyframes = {e.get("window_id"): e.get("screenshot") for e in events if e.get("type") == "keyframe"}
     for i, s in enumerate(steps):
         nxt = steps[i + 1]["t_start"] if i + 1 < len(steps) else float("inf")
@@ -282,6 +337,20 @@ def attach_effects(steps: list[dict], events: list[dict]) -> None:
                         eff["focused"] = title
                     else:
                         continue
+            elif e["type"] == "ui":
+                # Inside a single-page app nothing opens a window; this is what changed on the page.
+                ch = e.get("change")
+                if ch == "dialog_opened" and e.get("name"):
+                    eff.setdefault("dialog_opened", []).append(e["name"])
+                elif ch == "dialog_closed" and e.get("name"):
+                    eff.setdefault("dialog_closed", []).append(e["name"])
+                elif ch == "toggled":
+                    eff.setdefault("toggled", []).append({"element": e.get("element"),
+                                                          "from": e.get("from"), "to": e.get("to")})
+                elif ch == "progress":
+                    eff["progress"] = {"from": e.get("from"), "to": e.get("to")}
+                else:
+                    continue
             elif e["type"] == "app":
                 if e.get("app") and e.get("app") != app.get("name"):
                     eff["app"] = e.get("app")
@@ -354,8 +423,21 @@ def describe(step: dict) -> str:
         text += " -> closes " + ", ".join(f'"{w}"' for w in eff["closed"])
     for r in eff.get("retitled") or []:
         text += f' -> window becomes "{r.get("to")}"'
+    for d in eff.get("dialog_opened") or []:
+        text += f' -> shows "{d}"'
+    for d in eff.get("dialog_closed") or []:
+        text += f' -> dismisses "{d}"'
+    for tg in eff.get("toggled") or []:
+        text += f' -> "{tg.get("element")}" becomes {_toggle_word(tg.get("to"))}'
+    if eff.get("progress"):
+        p = eff["progress"]
+        text += f" -> progress {p.get('from') or '?'} -> {p.get('to')}"
     if eff.get("app"):
         text += f" -> switches to {eff['app']}"
+    if (step.get("container_context") or {}).get("list_item_index") is not None:
+        cc = step["container_context"]
+        n = f" of {cc['total_items']}" if cc.get("total_items") else ""
+        text += f" [list item {cc['list_item_index'] + 1}{n}]"
     return text
 
 
@@ -385,11 +467,19 @@ def _out_step(i: int, s: dict, run_dir: Path, use_ocr: bool, embed: bool) -> dic
     crop = s.get("crop")
     if crop and (run_dir / crop).exists():
         tgt["crop"] = crop
+        rect = s.get("crop_rect")
+        if rect:
+            tgt["crop_rect"] = rect
         if use_ocr:
-            tgt["ocr_label"] = ocr.label_near_center(run_dir / crop)
+            # The crop is cut to the element, not centred on the pointer, so say where the
+            # pointer was: OCR should return the label it landed on, whole.
+            point = images.point_in_crop(s.get("x") or 0, s.get("y") or 0, rect)
+            tgt["ocr_label"] = ocr.label_near_point(run_dir / crop, point)
         if embed:
             tgt["thumbnail"] = images.thumbnail_b64(run_dir / crop)
     out["target"] = tgt
+    if s.get("container"):
+        out["container_context"] = s["container"]
 
     if s["action"] == "type":
         if s.get("secure"):
@@ -410,6 +500,7 @@ def _out_step(i: int, s: dict, run_dir: Path, use_ocr: bool, embed: bool) -> dic
         # Clicking an app in the Dock means "open this app"; positions in the Dock are meaningless.
         out.update(action="open_app", app=el["title"], window=None,
                    target={"element": {"role": "AXDockItem", "title": el["title"]}})
+        out.pop("container_context", None)  # the Dock's own list says nothing about the task
     return out
 
 
@@ -457,11 +548,25 @@ def refresh_text(trace: dict) -> None:
                         for s in trace["steps"]]
 
 
+GUIDANCE_MODES = ("synthesize", "replay", "both")
+
+
+def _guidance(mode: str) -> dict:
+    """Which instructions the consuming AI gets. Synthesis is the default: write code, don't replay."""
+    out = {}
+    if mode in ("synthesize", "both"):
+        out["automation_synthesis_guidance"] = SYNTHESIS_GUIDANCE
+    if mode in ("replay", "both"):
+        out["replay_guidance"] = REPLAY_GUIDANCE
+    return out or {"automation_synthesis_guidance": SYNTHESIS_GUIDANCE}
+
+
 def compile_run(run_dir: Path, *, use_ocr: bool = True, embed_crops: bool = False,
-                redact_emails: bool = False) -> dict:
+                redact_emails: bool = False, guidance: str = "synthesize") -> dict:
     run_dir = Path(run_dir)
     meta, events = load_run(run_dir)
     raw = build_steps(events)
+    attach_containers(raw, events)
     attach_effects(raw, events)
     loose_notes = attach_notes(raw, events)
     steps = [_out_step(i, s, run_dir, use_ocr, embed_crops) for i, s in enumerate(raw, 1)]
@@ -505,7 +610,7 @@ def compile_run(run_dir: Path, *, use_ocr: bool = True, embed_crops: bool = Fals
         },
         "environment": {"os": host.get("os"), "machine": host.get("machine"),
                         "screens": host.get("screens"), "apps_used": apps},
-        "replay_guidance": REPLAY_GUIDANCE,
+        **_guidance(guidance),
         "parameters": params,
         "outline": [],
         "steps": steps,

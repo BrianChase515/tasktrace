@@ -36,12 +36,17 @@ def ocr_image(path: Path) -> list[dict]:
     return out
 
 
-def pick_label(items: list[dict], min_conf: float = 0.3) -> str | None:
+def pick_label(items: list[dict], min_conf: float = 0.3,
+               point: tuple[float, float] = (0.5, 0.5)) -> str | None:
     """Choose the text a click was aimed at from OCR results of the crop around it.
 
-    Prefers text under the click point, then text nearest to it. Text running off the edge of
-    the crop is probably cut off ("Submit applicatior"), so it only wins when nothing else is close.
+    `point` is where the pointer sits inside the crop, as fractions. Crops are cut to the
+    target element's bounds rather than centred on the pointer, so the pointer is usually
+    off-centre. Prefers text under the pointer, then text nearest to it. Text running off the
+    edge of the crop is probably cut off ("Submit applicatior"), so it only wins when nothing
+    else is close.
     """
+    px, py = point
     best, best_score = None, 99.0
     for o in items:
         text = o["text"].strip()
@@ -49,14 +54,20 @@ def pick_label(items: list[dict], min_conf: float = 0.3) -> str | None:
             continue
         x, y, w, h = o["box"]
         cx, cy = x + w / 2, y + h / 2
-        score = (cx - 0.5) ** 2 + 4 * (cy - 0.5) ** 2  # vertical distance matters more: lines are wide
-        if x <= 0.5 <= x + w and y <= 0.5 <= y + h:
+        score = (cx - px) ** 2 + 4 * (cy - py) ** 2  # vertical distance matters more: lines are wide
+        if x <= px <= x + w and y <= py <= y + h:
             score -= 1.0  # the click landed on this text
         if x < 0.01 or x + w > 0.99:
             score += 0.5  # clipped by the crop edge
         if score < best_score:
             best, best_score = text, score
     return best[:80] if best else None
+
+
+def label_near_point(path: Path, point: tuple[float, float] = (0.5, 0.5),
+                     min_conf: float = 0.3) -> str | None:
+    """The text at a given spot in a click crop."""
+    return pick_label(ocr_image(path), min_conf, point)
 
 
 def label_near_center(path: Path, min_conf: float = 0.3) -> str | None:

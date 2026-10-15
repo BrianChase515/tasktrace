@@ -23,7 +23,9 @@ from .paths import list_runs, resolve_trace
 
 mcp = _Server("tasktrace", instructions=(
     "Recorded demonstrations of tasks the user did on their Mac. Start with list_traces, then get_outline. "
-    "Use get_trace for locators and effects when replicating a task, and follow its replay_guidance."))
+    "Use get_trace for locators, container context and effects, and follow the guidance it carries: "
+    "automation_synthesis_guidance (compile the demonstration into a generalized script) or, on older "
+    "traces, replay_guidance (follow it step by step)."))
 
 
 def _load(trace: str) -> tuple[dict, object]:

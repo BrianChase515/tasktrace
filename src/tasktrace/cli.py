@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from .compile import compile_run, write_trace
+from .compile import GUIDANCE_MODES, compile_run, write_trace
 from .diff import apply_diff, diff_traces
 from .paths import home, list_runs, resolve_trace
 
@@ -16,11 +16,14 @@ def _compile_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-ocr", action="store_true", help="skip on-device OCR of click crops")
     p.add_argument("--embed-crops", action="store_true", help="embed small JPEG thumbnails in trace.json")
     p.add_argument("--redact-emails", action="store_true", help="also redact email addresses")
+    p.add_argument("--guidance", choices=GUIDANCE_MODES, default="synthesize",
+                   help="instructions for the AI that reads the trace. synthesize (default): write a "
+                        "generalized script from it. replay: follow it step by step. both: include each")
 
 
 def _do_compile(run_dir: Path, args, output: Path | None = None) -> Path:
     trace = compile_run(run_dir, use_ocr=not args.no_ocr, embed_crops=args.embed_crops,
-                        redact_emails=args.redact_emails)
+                        redact_emails=args.redact_emails, guidance=args.guidance)
     out = write_trace(trace, output or run_dir / "trace.json")
     size = out.stat().st_size
     print(f"Wrote {out}")

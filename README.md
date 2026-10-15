@@ -3,9 +3,14 @@
 **Record a task on your Mac once. Get one compact file an AI agent can understand and replicate.**
 
 You do a task. tasktrace watches through macOS accessibility APIs and writes a single `trace.json`:
-every click, keystroke and window change, with *what you clicked* (not just where), *what it caused*,
-*which values change from run to run*, and *why* — in your own words. Hand that file to Claude (or serve it
-over MCP) and the agent has what it needs to do the task itself.
+every click, keystroke and window change, with *what you clicked* (not just where), *what it was inside*,
+*what it caused*, *which values change from run to run*, and *why* — in your own words. Hand that file to
+Claude (or serve it over MCP) and the agent has what it needs to do the task itself.
+
+It is telemetry for code generation, not a macro. A trace tells the model which row of a list you
+picked and what that row said, what the whole form looked like, and how the page changed at each
+click — enough for it to write a script with real loops and matchers, rather than replay your exact
+clicks into a page whose rows have since moved.
 
 Then close the loop: **any AI writes a plan, a local executor runs it while you watch, every step is
 audited, and your corrections are triaged back to the AI** for the next version. The AI never needs
@@ -45,7 +50,23 @@ That's the trace's `outline`. Each step underneath carries the detail an agent n
 }
 ```
 
-Full example: [`examples/sample-trace.json`](examples/sample-trace.json) (~2k tokens for a 9-step task).
+A click inside a list or a form carries its surroundings too, so the agent can write a loop or fill a
+field it never saw you touch:
+
+```json
+"container_context": {
+  "kind": "modal",
+  "container": { "role": "AXGroup", "subrole": "AXApplicationDialog", "title": "Report Wizard" },
+  "interactive_siblings": [
+    { "role": "AXTextField", "title": "Report title", "placeholder": "e.g. Q1 forecast" },
+    { "role": "AXPopUpButton", "title": "Template", "value": "Standard forecast" },
+    { "role": "AXCheckBox", "title": "Share with finance", "value": "1" },
+    { "role": "AXSecureTextField", "title": "Approval PIN" }
+  ]
+}
+```
+
+Full example: [`examples/sample-trace.json`](examples/sample-trace.json) (~3k tokens for a 9-step task).
 
 ## Why
 
@@ -69,14 +90,21 @@ These tools are complementary. tasktrace's bet is that the **file format** is th
 ## What makes a trace useful
 
 - **Ranked locators.** Every click records the accessibility element (role, title, ancestry path), the text
-  visible at the click point (on-device OCR), the position relative to the window, and absolute
-  coordinates — in that order of robustness. `replay_guidance` tells the agent to use them in that order.
+  visible at the click point (on-device OCR, read from a crop cut to the element's own bounds so whole
+  words survive), the position relative to the window, and absolute coordinates — in that order of
+  robustness. The trace's guidance tells the agent to use them in that order.
   A click on a button's label resolves to the button itself, and clicks in the Dock become "Open <app>" steps.
+- **The container, not just the leaf.** A click inside a list records which row it was, out of how many,
+  and all the text in that row, so an agent can write a loop with a predicate instead of a row number. A
+  click inside a modal or form records every control in it — role, label, current value — including the
+  fields that were already filled in, so the agent sees the form's shape and not only the box you typed in.
 - **Works inside Chrome and Electron apps.** Chromium browsers and Electron apps (Slack, VS Code, Notion…)
   hide their contents from accessibility tools unless asked. TaskTrace asks while it records or replays, so
   web buttons and form fields come through by name, then switches the setting back when it's done.
 - **Cause and effect.** Window opens, closes, retitles and app switches are attributed to the step that
-  caused them, so the agent can verify each step before moving on instead of clicking blind.
+  caused them, so the agent can verify each step before moving on instead of clicking blind. Inside a
+  single-page app, where no window ever opens, the focused window's contents are sampled after each input:
+  a dialog appearing, a checkbox flipping, a wizard moving from 20% to 40% are recorded the same way.
 - **Parameters, not just values.** Text you type becomes a named parameter (`{report_title}`), typed as
   text/date/number/currency/email. A field with no label is named after the question you clicked just before. Record the task twice and `tasktrace diff` confirms which values really
   vary and which are constants, and marks steps that only happen sometimes as `optional`.
@@ -147,6 +175,7 @@ Permissions apply to the app that runs Python (Terminal, iTerm, VS Code). Restar
 |---|---|
 | `tasktrace record [name] --goal "..."` | Record a run, then compile it |
 | `tasktrace compile <run_dir> [--embed-crops]` | Rebuild `trace.json` from raw events |
+| `tasktrace compile <run_dir> --guidance replay\|both` | Ask the trace's reader to follow it step by step, rather than compile it into a script (the default) |
 | `tasktrace outline <run>` | Print parameters and the step outline |
 | `tasktrace diff <runA> <runB> [--write]` | Learn variables vs constants from two runs |
 | `tasktrace list` | List runs |
@@ -242,10 +271,13 @@ answer as `{title}`, and the audit records the question and answer.
 ## How it works
 
 ```
-recorder_macos.py     CGEventTap (listen-only) ─┐
-                      AXUIElement at click/focus ├─> events.jsonl + crops/ + keyframes/
-                      CGWindowList poller 5 Hz ─┘
-compile.py            events ─> steps ─> effects ─> notes ─> parameters ─> redaction ─> trace.json
+recorder_macos.py     CGEventTap (listen-only) ──┐
+                      AXUIElement at click/focus │
+                      container around the click ├─> events.jsonl + crops/ + keyframes/
+                      CGWindowList poller 5 Hz   │
+                      window contents after input┘
+axcontext.py          AX subtree ─> list row / form schema / page state, and what changed in it
+compile.py            events ─> steps ─> containers ─> effects ─> notes ─> parameters ─> redaction ─> trace.json
 diff.py               align two traces ─> confirmed variables / constants / optional steps
 mcp_server.py         trace.json ─> MCP tools
 plan.py / prompts.py  trace ─> plan (deterministic, or any AI via prompt) with author + lineage

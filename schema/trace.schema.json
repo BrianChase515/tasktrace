@@ -4,7 +4,11 @@
   "title": "tasktrace trace",
   "description": "One recorded task demonstration, compiled for an AI agent to understand and replicate.",
   "type": "object",
-  "required": ["schema", "task", "replay_guidance", "parameters", "outline", "steps", "success_criteria"],
+  "required": ["schema", "task", "parameters", "outline", "steps", "success_criteria"],
+  "anyOf": [
+    { "required": ["automation_synthesis_guidance"] },
+    { "required": ["replay_guidance"] }
+  ],
   "properties": {
     "schema": { "const": "tasktrace/0.1" },
     "generator": { "type": "string" },
@@ -49,7 +53,14 @@
         }
       }
     },
-    "replay_guidance": { "type": "string" },
+    "automation_synthesis_guidance": {
+      "type": "string",
+      "description": "Default. Tells the consuming AI to compile this demonstration into a generalized automation script (loops, wildcard matchers, pruned detours) rather than replaying it click for click."
+    },
+    "replay_guidance": {
+      "type": "string",
+      "description": "Literal step-by-step instructions, for the local executor loop. Written when --guidance replay|both."
+    },
     "parameters": {
       "type": "array",
       "items": {
@@ -141,10 +152,48 @@
             "abs_xy": { "$ref": "#/$defs/xy" },
             "to_xy": { "$ref": "#/$defs/xy" },
             "crop": { "type": "string" },
+            "crop_rect": { "$ref": "#/$defs/rect", "description": "Screen region the crop covers: the element's own bounds, padded, so OCR reads whole words." },
             "thumbnail": { "type": "string" }
           }
         },
+        "container_context": { "$ref": "#/$defs/container_context" },
         "effect": { "$ref": "#/$defs/effect" }
+      }
+    },
+    "container_context": {
+      "type": "object",
+      "description": "What the click happened inside: the list row, or the modal/form and its fields. Lets a model write a loop over rows, or fill a form it can see whole, instead of repeating one recorded position.",
+      "properties": {
+        "kind": { "enum": ["list", "modal", "list_in_modal"] },
+        "container": {
+          "type": "object",
+          "properties": {
+            "role": { "type": "string" },
+            "subrole": { "type": "string" },
+            "role_description": { "type": "string" },
+            "title": { "type": "string" }
+          }
+        },
+        "list_item_index": { "type": "integer", "minimum": 0, "description": "0-based child index of the row that was clicked." },
+        "total_items": { "type": "integer", "minimum": 0, "description": "Immediate children of the list at record time." },
+        "item_text_summary": { "type": "string", "description": "All the text in that row: the whole card, not the fragment under the pointer." },
+        "item_controls": { "type": "array", "items": { "$ref": "#/$defs/control" } },
+        "interactive_siblings": {
+          "type": "array",
+          "description": "Every interactive control visible in the same modal or form, including ones the person never touched.",
+          "items": { "$ref": "#/$defs/control" }
+        },
+        "progress": { "type": "string" },
+        "modal": { "type": "object", "description": "Present when a list sits inside a modal: the modal's own context." }
+      }
+    },
+    "control": {
+      "type": "object",
+      "properties": {
+        "role": { "type": "string" },
+        "title": { "type": "string" },
+        "value": { "type": "string" },
+        "placeholder": { "type": "string" }
       }
     },
     "effect": {
@@ -159,6 +208,29 @@
         },
         "focused": { "type": "string" },
         "app": { "type": "string" },
+        "dialog_opened": {
+          "type": "array",
+          "description": "A modal or dialog that appeared inside the page, with no window opening.",
+          "items": { "type": "string" }
+        },
+        "dialog_closed": { "type": "array", "items": { "type": "string" } },
+        "toggled": {
+          "type": "array",
+          "description": "Checkboxes, radio buttons or switches whose value changed as a result of the step.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "element": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        },
+        "progress": {
+          "type": "object",
+          "description": "A progress indicator that advanced, e.g. 20 percent -> 40 percent.",
+          "properties": { "from": { "type": "string" }, "to": { "type": "string" } }
+        },
         "settle_ms": { "type": "integer" },
         "screenshot": { "type": "string" }
       }

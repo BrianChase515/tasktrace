@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+TaskTrace's output is aimed at an AI that writes a *script* for the task, not one that replays
+your clicks. Four changes, all in what gets captured and how the trace asks to be used:
+
+- **A click now records what it was inside, not just what it hit.** Clicking a row in a list
+  records which row, out of how many, and everything that row said (job title, company, location —
+  not the 50 pixels under the pointer). Clicking inside a modal or form records every field in it,
+  with its current value, including the ones you never had to touch. New `container_context` on the step.
+- **Click crops follow the element's own bounds**, so OCR reads whole words. Labels used to come
+  back sliced in half ("asy Apply") because the screenshot was a fixed box centred on the pointer.
+- **Changes inside a single page are now effects.** A modal appearing, a checkbox flipping, a wizard
+  going from 20% to 40%: none of these open a window, so none of them used to be recorded. The focused
+  window's contents are sampled for a few seconds after each input and the difference is attributed
+  to the step that caused it.
+- **New guidance for the AI reading the trace**: compile this demonstration into a generalized script
+  (loops over list rows, a loop over wizard pages, wildcard matchers, human detours pruned) instead of
+  replaying it click for click. `tasktrace compile --guidance replay|both` keeps the old instructions
+  for the local executor loop.
+
 ## 0.5.4
 
 - **Fixed: permission setup could loop forever.** macOS ties each permission switch to one exact app

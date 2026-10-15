@@ -54,7 +54,8 @@ from CoreFoundation import (
     kCFRunLoopDefaultMode,
 )
 
-from . import __version__
+from . import __version__, axcontext
+from .images import crop_rect
 
 AX_POINT = 1  # kAXValueCGPointType
 AX_SIZE = 2  # kAXValueCGSizeType
@@ -80,7 +81,7 @@ IGNORED_WINDOW_OWNERS = {
 HOTKEY_MODS = Quartz.kCGEventFlagMaskControl | Quartz.kCGEventFlagMaskAlternate
 KC_N, KC_D, KC_P, KC_Q = 45, 2, 35, 12  # ANSI key codes
 FOCUS_RESET_KEYS = {36, 48, 53, 76}  # return, tab, escape, enter
-CROP_W, CROP_H = 360, 110  # wide enough to read a whole button or field label
+# Click crops are cut to the clicked element's own bounds: see images.crop_rect.
 
 # System prompts that pop up while you work but aren't part of the task.
 NOISE_BUNDLES = {"com.apple.UserNotificationCenter", "com.apple.notificationcenterui"}
@@ -102,6 +103,18 @@ ACTIONABLE_ROLES = {
 }
 PASS_THROUGH_ROLES = {"AXStaticText", "AXImage", "AXGroup", "AXUnknown", "AXHeading", "AXGenericElement"}
 POLL_S = 0.2
+
+# Context around a click: what it was clicked *inside*, not just the leaf under the pointer.
+CONTAINER_DEPTH = 8  # ancestors to walk looking for a list row or a modal
+SNAPSHOT_NODES, SNAPSHOT_DEPTH = 300, 8
+SNAPSHOT_BUDGET_S = 1.2  # never let a slow app's accessibility tree hold up the recording
+LIST_SCAN = 200  # children of a list to scan for the row that was clicked
+
+# Inside a single-page app nothing opens a window, so the window poller sees nothing. For a few
+# seconds after each input, the focused window's contents are sampled and diffed instead.
+UI_NODES, UI_DEPTH = 400, 12
+UI_WATCH_S = 3.5
+UI_POLL_EVERY = 2  # every other poll tick, so ~0.4 s
 
 MOUSE_DOWN = {Quartz.kCGEventLeftMouseDown: "left", Quartz.kCGEventRightMouseDown: "right",
               Quartz.kCGEventOtherMouseDown: "other"}
@@ -261,6 +274,104 @@ def _element_info(el) -> tuple[dict, bool]:
     return info, secure
 
 
+def _snapshot(el, max_nodes: int = SNAPSHOT_NODES, depth: int = SNAPSHOT_DEPTH,
+              budget_s: float = SNAPSHOT_BUDGET_S) -> dict | None:
+    """A bounded plain-dict copy of an accessibility subtree, in the shape `axcontext` reads.
+
+    Bounded three ways (nodes, depth, wall clock) because a web page's tree can be enormous
+    and an unresponsive app can make every attribute read wait for its timeout.
+    """
+    left = [max_nodes]
+    deadline = time.monotonic() + budget_s
+
+    def rec(cur, d: int) -> dict | None:
+        if left[0] <= 0 or time.monotonic() > deadline:
+            return None
+        left[0] -= 1
+        node: dict = {}
+        for key, attr in (("role", "AXRole"), ("subrole", "AXSubrole"),
+                          ("role_description", "AXRoleDescription"), ("title", "AXTitle"),
+                          ("description", "AXDescription"), ("placeholder", "AXPlaceholderValue"),
+                          ("identifier", "AXIdentifier")):
+            v = _ax_str(cur, attr, 120)
+            if v:
+                node[key] = v
+        if not axcontext.is_secure(node):
+            v = _ax_str(cur, "AXValue", 120)
+            if v:
+                node["value"] = v
+        if "title" not in node and node.get("role") in axcontext.INTERACTIVE_ROLES:
+            tui = _ax(cur, "AXTitleUIElement")  # a field labelled by a sibling
+            if tui is not None:
+                v = _ax_str(tui, "AXValue", 80) or _ax_str(tui, "AXTitle", 80)
+                if v:
+                    node["title"] = v
+        if d < depth:
+            kids = [rec(c, d + 1) for c in (_ax(cur, "AXChildren") or [])[:60]]
+            kids = [k for k in kids if k]
+            if kids:
+                node["children"] = kids
+        return node or None
+
+    try:
+        return rec(el, 0)
+    except Exception:
+        return None
+
+
+def _eq(a, b) -> bool:
+    try:
+        return bool(a == b)
+    except Exception:
+        return False
+
+
+def _dialogish(el, role: str | None) -> bool:
+    """Does this ancestor look like a modal, sheet, or a titled form group worth describing?"""
+    if role in axcontext.DIALOG_ROLES or _ax_str(el, "AXSubrole") in axcontext.DIALOG_SUBROLES:
+        return True
+    rd = (_ax_str(el, "AXRoleDescription") or "").lower()
+    if "dialog" in rd or "modal" in rd or "alert" in rd:
+        return True
+    return role in ("AXGroup", "AXScrollArea") and bool(_ax_str(el, "AXTitle") or _ax_str(el, "AXDescription"))
+
+
+def _list_context(list_el, item_el) -> dict | None:
+    """Which row of a list was clicked, out of how many, and everything that row says."""
+    children = list(_ax(list_el, "AXChildren") or [])[:LIST_SCAN]
+    idx = next((i for i, c in enumerate(children) if _eq(c, item_el)), None)
+    if idx is None:
+        fi = _ax_frame(item_el)
+        if fi:
+            idx = next((i for i, c in enumerate(children[:60]) if _ax_frame(c) == fi), None)
+    shell = {"role": _ax_str(list_el, "AXRole"), "title": _ax_str(list_el, "AXTitle"),
+             "description": _ax_str(list_el, "AXDescription"), "children": [{} for _ in children]}
+    return axcontext.list_context({k: v for k, v in shell.items() if v is not None}, idx,
+                                  _snapshot(item_el, max_nodes=120, depth=7))
+
+
+def container_context(el) -> dict | None:
+    """Walk up from the clicked element to the list row and/or modal it sits in."""
+    list_ctx = modal_ctx = None
+    cur, child = el, None
+    for _ in range(CONTAINER_DEPTH):
+        role = _ax_str(cur, "AXRole")
+        if role is None:
+            break
+        if list_ctx is None and role in axcontext.LIST_ROLES and child is not None:
+            list_ctx = _list_context(cur, child)
+        elif modal_ctx is None and _dialogish(cur, role):
+            # A group with one stray control isn't a form: keep walking until something is.
+            modal_ctx = axcontext.modal_context(_snapshot(cur), min_controls=2)
+        if modal_ctx is not None or role in ("AXWindow", "AXApplication", "AXMenuBar"):
+            break
+        parent = _ax(cur, "AXParent")
+        if parent is None:
+            break
+        child, cur = cur, parent
+    return axcontext.merge_context(list_ctx, modal_ctx)
+
+
 def _window_list() -> list[dict]:
     """On-screen app windows, front to back."""
     opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
@@ -338,7 +449,11 @@ class Recorder:
         self.front: dict = {"name": None, "bundle_id": None, "pid": None}
         self._bundles: dict[int, str] = {}
         self._focus_cache: tuple = (0.0, None, False)
-        self.crop_n = self.key_n = self.done_n = 0
+        self.crop_n = self.key_n = self.done_n = self.click_n = 0
+        self._ui_prev: dict | None = None
+        self._ui_key: tuple | None = None
+        self._ui_tick = 0
+        self._ui_watch_until = 0.0
         self.tap = None
         self._own_pid = os.getpid()
         self._ax_enabled: dict = {}  # pid -> accessibility attributes we switched on
@@ -403,12 +518,16 @@ class Recorder:
         app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
         return {"name": str(app.localizedName() or "") if app else "", "bundle_id": self._bundle(pid), "pid": pid}
 
-    def _mouse_ctx(self, x: int, y: int) -> tuple[dict | None, bool]:
-        """Context for a click, or (None, False) for clicks that aren't part of the task
-        (TaskTrace's own menu and dialogs, system notification prompts)."""
+    def _mouse_ctx(self, x: int, y: int) -> tuple[dict | None, bool, object]:
+        """Context for a click, or (None, False, None) for clicks that aren't part of the task
+        (TaskTrace's own menu and dialogs, system notification prompts).
+
+        The third value is the accessibility element that was clicked; its surrounding container
+        is described on the worker thread, off the event tap.
+        """
         win = self._window_at(x, y)
         ctx = self._ctx_for_window(win)
-        secure = False
+        secure, target = False, None
         try:
             err, el = AXUIElementCopyElementAtPosition(self.system, float(x), float(y), None)
             if err == 0 and el is not None:
@@ -419,11 +538,11 @@ class Recorder:
                 except Exception:
                     pass
                 if pid == self._own_pid:
-                    return None, False
+                    return None, False, None
                 if pid is not None:
                     owner = self._bundle(pid)
                     if owner in NOISE_BUNDLES:
-                        return None, False
+                        return None, False, None
                     if not win or win["pid"] != pid:
                         # The Dock, the menu bar, a popover: the window underneath isn't what was clicked.
                         ctx = {"app": self._app_info(pid)}
@@ -434,7 +553,7 @@ class Recorder:
                     ctx["element"]["title"] = child_text
         except Exception:
             pass
-        return ctx, secure
+        return ctx, secure, target
 
     def _ensure_ax(self, pid: int, bundle_id: str) -> None:
         if pid in self._ax_enabled or pid == self._own_pid or bundle_id in (DOCK_BUNDLE, ""):
@@ -492,6 +611,7 @@ class Recorder:
                 return
         if self._blocked():
             return
+        self._ui_watch_until = time.monotonic() + UI_WATCH_S
         ns = NSEvent.eventWithCGEvent_(event)
         chars = str(ns.characters() or "") if ns else ""
         base = str(ns.charactersIgnoringModifiers() or "") if ns else ""
@@ -521,20 +641,27 @@ class Recorder:
             return
         t = self.now()
         self._focus_cache = (0.0, None, False)
-        ctx, secure = self._mouse_ctx(x, y)
+        self._ui_watch_until = time.monotonic() + UI_WATCH_S
+        ctx, secure, target = self._mouse_ctx(x, y)
         if ctx is None:  # a click on TaskTrace's own menu or dialog
             self._ignored_buttons.add(button)
             return
+        self.click_n += 1
         ev = {
-            "t": t, "type": "mouse_down", "button": button, "x": x, "y": y,
+            "t": t, "type": "mouse_down", "button": button, "x": x, "y": y, "ref": self.click_n,
             "clicks": int(Quartz.CGEventGetIntegerValueField(event, Quartz.kCGMouseEventClickState)),
             "mods": _mods(Quartz.CGEventGetFlags(event)), "ctx": ctx,
         }
+        # Describing the container means walking the tree, which is far too slow for the event
+        # tap (macOS disables a tap that takes too long), so the worker thread does it.
+        if target is not None:
+            self.jobs.put(("container", target, self.click_n))
         if self.crops and not secure:
             self.crop_n += 1
             rel = f"crops/{self.crop_n:04d}.png"
-            ev["crop"] = rel
-            self.jobs.put(("crop", x, y, rel))
+            rect = crop_rect(x, y, (ctx.get("element") or {}).get("frame"))
+            ev["crop"], ev["crop_rect"] = rel, rect
+            self.jobs.put(("crop", rect, rel))
         self.emit(ev)
 
     def _on_scroll(self, event) -> None:
@@ -617,7 +744,35 @@ class Recorder:
             if fw and fkey != prev_focus:
                 self.emit({"type": "window", "change": "focused", **self._wpub(fw)})
             prev_focus, prev = fkey, cur
+            self._ui_tick += 1
+            if self._ui_tick % UI_POLL_EVERY == 0 and time.monotonic() < self._ui_watch_until:
+                self._poll_ui(front, fkey)
             time.sleep(POLL_S)
+
+    def _poll_ui(self, front: dict, window_key) -> None:
+        """Sample the focused window's contents and emit what changed since the last sample.
+
+        This is what catches single-page apps: a modal appearing, a checkbox flipping, a wizard
+        moving from 20% to 40% — none of which open or close a window.
+        """
+        pid = front.get("pid")
+        if not pid or pid == self._own_pid:
+            return
+        try:
+            app_el = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app_el, 0.25)
+            win = _ax(app_el, "AXFocusedWindow") or _ax(app_el, "AXMainWindow")
+            if win is None:
+                return
+            state = axcontext.ui_state(_snapshot(win, max_nodes=UI_NODES, depth=UI_DEPTH),
+                                       max_nodes=UI_NODES)
+            key = (pid, window_key)
+            if key == self._ui_key:  # a different window is a fresh baseline, not a page change
+                for ch in axcontext.diff_ui_state(self._ui_prev, state):
+                    self.emit({"type": "ui", **ch})
+            self._ui_key, self._ui_prev = key, state
+        except Exception as exc:
+            self.emit({"type": "error", "where": "ui_poll", "error": repr(exc)[:300]})
 
     def _worker(self) -> None:
         while not (self.stop.is_set() and self.jobs.empty()):
@@ -626,10 +781,15 @@ class Recorder:
             except queue.Empty:
                 continue
             try:
-                if job[0] == "crop":
-                    _, x, y, rel = job
-                    rect = f"{x - CROP_W // 2},{y - CROP_H // 2},{CROP_W},{CROP_H}"
-                    subprocess.run(["screencapture", "-x", "-R", rect, str(self.run_dir / rel)],
+                if job[0] == "container":
+                    _, el, ref = job
+                    cc = container_context(el)
+                    if cc:
+                        self.emit({"type": "container", "ref": ref, "context": cc})
+                elif job[0] == "crop":
+                    _, rect, rel = job
+                    region = ",".join(str(v) for v in rect)
+                    subprocess.run(["screencapture", "-x", "-R", region, str(self.run_dir / rel)],
                                    timeout=10, check=False, capture_output=True)
                 elif job[0] == "window":
                     wid = job[1]

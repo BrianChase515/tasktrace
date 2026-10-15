@@ -7,7 +7,13 @@ create a quarterly report in a web portal (Safari), including a password-field P
 """
 
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from tasktrace import axcontext  # noqa: E402
+from tasktrace.images import crop_rect  # noqa: E402
 
 HERE = Path(__file__).parent / "run_q3"
 
@@ -29,12 +35,20 @@ def ctx(win, element=None):
     return c
 
 
-def click(t, x, y, win, element, crop=None, clicks=1):
-    down = dict(t=t, type="mouse_down", button="left", x=x, y=y, clicks=clicks, mods=[], ctx=ctx(win, element))
+refs = [0]
+
+
+def click(t, x, y, win, element, crop=None, clicks=1, container=None):
+    refs[0] += 1
+    down = dict(t=t, type="mouse_down", button="left", x=x, y=y, clicks=clicks, mods=[],
+                ref=refs[0], ctx=ctx(win, element))
     if crop:
         down["crop"] = crop
+        down["crop_rect"] = crop_rect(x, y, element.get("frame"))
     ev(**down)
     ev(t=t + 70, type="mouse_up", button="left", x=x, y=y)
+    if container:  # the recorder describes the container on its worker thread, just after the click
+        ev(t=t + 30, type="container", ref=refs[0], context=container)
 
 
 KEYCODES = {c: i for i, c in enumerate("asdfhgzxcv")}  # cosmetic; compiler uses chars
@@ -70,6 +84,21 @@ pin_field = {"role": "AXTextField", "subrole": "AXSecureTextField", "title": "Ap
 create_btn = {"role": "AXButton", "title": "Create", "frame": [900, 566, 90, 28],
               "path": "AXWindow 'Report Wizard' > AXButton 'Create'"}
 
+# What the recorder sees around a click inside the wizard: the whole form, including the
+# fields this run never had to touch.
+WIZARD_FORM = axcontext.modal_context({
+    "role": "AXGroup", "subrole": "AXApplicationDialog", "title": "Report Wizard",
+    "children": [
+        {"role": "AXTextField", "title": "Report title", "placeholder": "e.g. Q1 forecast"},
+        {"role": "AXTextField", "title": "Period end", "placeholder": "YYYY-MM-DD"},
+        {"role": "AXPopUpButton", "title": "Template", "value": "Standard forecast"},
+        {"role": "AXCheckBox", "title": "Share with finance", "value": "1"},
+        {"role": "AXTextField", "subrole": "AXSecureTextField", "title": "Approval PIN"},
+        {"role": "AXButton", "title": "Create"},
+        {"role": "AXButton", "title": "Cancel"},
+    ],
+})
+
 ev(t=0, type="window", change="focused", app="Safari", title=MAIN["title"], window_id=101, bounds=MAIN["bounds"])
 ev(t=800, type="note", text="Starting from the Reports page; New Report is top right")
 click(2000, 1290, 142, MAIN, new_report, crop="crops/0001.png")
@@ -77,7 +106,7 @@ ev(t=2650, type="window", change="opened", app="Safari", title=WIZ["title"], win
 ev(t=2650, type="window", change="focused", app="Safari", title=WIZ["title"], window_id=102, bounds=WIZ["bounds"])
 ev(t=2900, type="keyframe", reason="window_opened", window_id=102, screenshot="keyframes/0001.png")
 
-click(4100, 720, 300, WIZ, title_field, crop="crops/0002.png")
+click(4100, 720, 300, WIZ, title_field, crop="crops/0002.png", container=WIZARD_FORM)
 t = type_text(4500, "Q3 forcast\b\b\b\becast", WIZ, title_field)  # typo fixed with backspaces
 ev(t=t + 200, type="key", keycode=48, mods=[], chars="\t", base="\t", ctx=ctx(WIZ, title_field))
 ev(t=t + 500, type="note", text="Always use the last day of the quarter")
@@ -86,8 +115,11 @@ t = type_text(t + 700, "2026-09-30", WIZ, period_field)
 click(t + 800, 640, 422, WIZ, pin_field)  # no crop: recorder never screenshots password fields
 t = type_text(t + 1300, "4821", WIZ, pin_field, secure=True)
 
-click(t + 900, 940, 580, WIZ, create_btn, crop="crops/0004.png")
+click(t + 900, 940, 580, WIZ, create_btn, crop="crops/0004.png", container=WIZARD_FORM)
 tc = t + 900
+# The "Share with finance" box clears itself when the report is created: a change inside the
+# page that no window event would ever show.
+ev(t=tc + 400, type="ui", change="toggled", element="Share with finance", **{"from": "1", "to": "0"})
 ev(t=tc + 600, type="window", change="closed", app="Safari", title=WIZ["title"], window_id=102, bounds=WIZ["bounds"])
 ev(t=tc + 600, type="window", change="retitled", app="Safari", title="Acme Portal - Q3 forecast",
    window_id=101, bounds=MAIN["bounds"], **{"from": MAIN["title"]})
