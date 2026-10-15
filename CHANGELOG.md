@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 TaskTrace's output is aimed at an AI that writes a *script* for the task, not one that replays
 your clicks. Four changes, all in what gets captured and how the trace asks to be used:
